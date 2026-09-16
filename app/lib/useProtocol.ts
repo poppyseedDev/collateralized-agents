@@ -1,0 +1,244 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useAnchorWallet, useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
+import {
+  AgentAccount,
+  PositionAccount,
+  agentPda,
+  agentVaultPda,
+  decodeAgent,
+  decodePosition,
+  positionPda,
+  positionVaultPda,
+  readonlyProgram,
+  walletProgram,
+} from "./program";
+
+export function useAgents() {
+  const { connection } = useConnection();
+  const [agents, setAgents] = useState<AgentAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const program = readonlyProgram(connection);
+      const raw = await program.account.agent.all();
+      const list = raw.map(decodeAgent) as AgentAccount[];
+      list.sort((a, b) => b.totalCollateral.cmp(a.totalCollateral));
+      setAgents(list);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [connection]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+  return { agents, loading, error, refresh };
+}
+
+/** Positions filtered by a memcmp on either the trader (offset 8) or agent (offset 40). */
+export function usePositions(filter: { trader?: PublicKey; agent?: PublicKey } | null) {
+  const { connection } = useConnection();
+  const [positions, setPositions] = useState<PositionAccount[]>([]);
+  const [loading, setLoading] = useState(false);
+  const key = filter?.trader?.toBase58() ?? filter?.agent?.toBase58() ?? null;
+  const kind = filter?.trader ? "trader" : "agent";
+
+  const refresh = useCallback(async () => {
+    if (!key) {
+      setPositions([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const program = readonlyProgram(connection);
+      const raw = await program.account.position.all([
+        { memcmp: { offset: kind === "trader" ? 8 : 40, bytes: key } },
+      ]);
+      const list = raw.map(decodePosition) as PositionAccount[];
+      list.sort((a, b) => b.openedAt.cmp(a.openedAt));
+      setPositions(list);
+    } finally {
+      setLoading(false);
+    }
+  }, [connection, key, kind]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+  return { positions, loading, refresh };
+}
+
+export type TxState =
+  | { kind: "idle" }
+  | { kind: "pending"; label: string }
+  | { kind: "ok"; sig: string; label: string }
+  | { kind: "err"; message: string };
+
+/** Every write instruction the UI needs, bound to the connected wallet. */
+export function useActions() {
+  const { connection } = useConnection();
+  const wallet = useAnchorWallet();
+  const { publicKey } = useWallet();
+  const [tx, setTx] = useState<TxState>({ kind: "idle" });
+
+  const run = useCallback(
+    async (label: string, fn: () => Promise<string>) => {
+      setTx({ kind: "pending", label });
+      try {
+        const sig = await fn();
+        setTx({ kind: "ok", sig, label });
+        return sig;
+      } catch (e) {
+        const msg = parseAnchorError(e);
+        setTx({ kind: "err", message: msg });
+        throw e;
+      }
+    },
+    [],
+  );
+
+  const need = () => {
+    if (!wallet || !publicKey) throw new Error("Connect a wallet first");
+    return { program: walletProgram(connection, wallet), me: publicKey };
+  };
+
+  return {
+    tx,
+    reset: () => setTx({ kind: "idle" }),
+    connected: !!publicKey,
+
+    // ---- trader ----
+    openPosition: (agent: AgentAccount, lamports: number, durationSecs: number) =>
+      run("Open position", async () => {
+        const { program, me } = need();
+        const nonce = new BN(Date.now());
+        const position = positionPda(agent.publicKey, me, nonce);
+        return program.methods
+          .openPosition(nonce, new BN(lamports), new BN(durationSecs))
+          .accounts({
+            trader: me,
+            agent: agent.publicKey,
+            position,
+            positionVault: positionVaultPda(position),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }),
+    cancelPosition: (p: PositionAccount) =>
+      run("Cancel position", async () => {
+        const { program, me } = need();
+        return program.methods
+          .cancelPosition()
+          .accounts({
+            trader: me,
+            agent: p.agent,
+            position: p.publicKey,
+            positionVault: positionVaultPda(p.publicKey),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }),
+    claimDefault: (p: PositionAccount) =>
+      run("Claim collateral", async () => {
+        const { program, me } = need();
+        return program.methods
+          .claimDefault()
+          .accounts({
+            trader: me,
+            agent: p.agent,
+            agentVault: agentVaultPda(p.agent),
+            position: p.publicKey,
+            positionVault: positionVaultPda(p.publicKey),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }),
+
+    // ---- agent ----
+    registerAgent: (name: string, strategy: string, ratioBps: number, drawdownBps: number) =>
+      run("Register agent", async () => {
+        const { program, me } = need();
+        const agent = agentPda(me);
+        return program.methods
+          .registerAgent(name, strategy, ratioBps, drawdownBps)
+          .accounts({
+            authority: me,
+            agent,
+            agentVault: agentVaultPda(agent),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }),
+    depositCollateral: (lamports: number) =>
+      run("Deposit collateral", async () => {
+        const { program, me } = need();
+        const agent = agentPda(me);
+        return program.methods
+          .depositCollateral(new BN(lamports))
+          .accounts({ authority: me, agent, agentVault: agentVaultPda(agent), systemProgram: SystemProgram.programId })
+          .rpc();
+      }),
+    withdrawCollateral: (lamports: number) =>
+      run("Withdraw collateral", async () => {
+        const { program, me } = need();
+        const agent = agentPda(me);
+        return program.methods
+          .withdrawCollateral(new BN(lamports))
+          .accounts({ authority: me, agent, agentVault: agentVaultPda(agent), systemProgram: SystemProgram.programId })
+          .rpc();
+      }),
+    setAccepting: (accepting: boolean) =>
+      run(accepting ? "Resume accepting" : "Pause agent", async () => {
+        const { program, me } = need();
+        return program.methods.setAccepting(accepting).accounts({ authority: me, agent: agentPda(me) }).rpc();
+      }),
+    drawFunds: (p: PositionAccount) =>
+      run("Draw funds", async () => {
+        const { program, me } = need();
+        return program.methods
+          .drawFunds()
+          .accounts({
+            authority: me,
+            agent: p.agent,
+            position: p.publicKey,
+            positionVault: positionVaultPda(p.publicKey),
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }),
+    settlePosition: (p: PositionAccount, returnedLamports: number) =>
+      run("Settle position", async () => {
+        const { program, me } = need();
+        return program.methods
+          .settlePosition(new BN(returnedLamports))
+          .accounts({
+            authority: me,
+            agent: p.agent,
+            agentVault: agentVaultPda(p.agent),
+            position: p.publicKey,
+            positionVault: positionVaultPda(p.publicKey),
+            trader: p.trader,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }),
+  };
+}
+
+function parseAnchorError(e: unknown): string {
+  const err = e as { error?: { errorMessage?: string }; message?: string; logs?: string[] };
+  if (err?.error?.errorMessage) return err.error.errorMessage;
+  const m = err?.message ?? String(e);
+  if (m.includes("User rejected")) return "Transaction rejected in wallet.";
+  return m.length > 240 ? m.slice(0, 240) + "…" : m;
+}

@@ -1,0 +1,44 @@
+use anchor_lang::prelude::*;
+
+use crate::{constants::*, error::ErrorCode, events::CollateralChanged, state::Agent};
+
+#[derive(Accounts)]
+pub struct DepositCollateral<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [AGENT_SEED, authority.key().as_ref()],
+        bump = agent.bump,
+        has_one = authority @ ErrorCode::UnauthorizedAgent,
+    )]
+    pub agent: Account<'info, Agent>,
+    #[account(
+        mut,
+        seeds = [AGENT_VAULT_SEED, agent.key().as_ref()],
+        bump = agent.vault_bump
+    )]
+    pub agent_vault: SystemAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn handle_deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
+    require!(amount > 0, ErrorCode::ZeroAmount);
+    super::transfer_from_signer(
+        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.agent_vault.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        amount,
+    )?;
+    let agent = &mut ctx.accounts.agent;
+    agent.total_collateral = agent
+        .total_collateral
+        .checked_add(amount)
+        .ok_or(ErrorCode::Overflow)?;
+    emit!(CollateralChanged {
+        agent: agent.key(),
+        delta: amount as i64,
+        total_collateral: agent.total_collateral,
+    });
+    Ok(())
+}
