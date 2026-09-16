@@ -22,6 +22,9 @@ may charge. If it misbehaves, the collateral is paid to the trader by the progra
 Example: you allocate 1,000 to a 30% agent. 300 of its collateral is locked to
 you. The agent must return your money by the deadline or lose the 300.
 
+See [docs/settlement.md](docs/settlement.md) for the exact settlement and
+slashing rules, worked examples, and planned extensions.
+
 ## Layout
 
 ```
@@ -57,8 +60,13 @@ program through the same TypeScript client the frontend uses (real RPC,
 airdrops, PDAs, IDL decoding). The last localnet test waits out a real
 60-second deadline to exercise the default claim.
 
-In Phantom: Settings → Developer settings → enable Testnet mode and pick
-**Localnet**. Then connect on http://localhost:3000.
+On localnet the wallet picker also offers **Burner Wallet**, an in-memory
+keypair for quick testing, and the header shows an **Airdrop 10 SOL** button.
+The burner key lives only in the page, so a full reload gives you a new wallet.
+
+To use Phantom instead: Settings → Developer settings → enable Testnet mode and
+pick **Localnet**, otherwise Phantom simulates against devnet and reports
+"not enough SOL". Then connect on http://localhost:3000.
 
 After changing the program: `anchor build && anchor deploy --provider.cluster localnet`
 and copy the IDL: `cp target/idl/collateralized_agents.json app/lib/idl.json`.

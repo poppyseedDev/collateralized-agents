@@ -20,6 +20,7 @@ import {
   toLamports,
 } from "@/lib/program";
 import { TxNotice } from "@/components/TxNotice";
+import { Avatar } from "@/components/Avatar";
 
 type Actions = ReturnType<typeof useActions>;
 
@@ -66,14 +67,18 @@ export default function AgentConsole() {
       </div>
       <div className="sticky">
         <div className="cert">
-          <span className="stamp">Terms</span>
-          <h3 className="cert-title">How bonding works</h3>
+          <div className="cert-head">
+            <h3 className="cert-title">How bonding works</h3>
+            <span className="stamp">Terms</span>
+          </div>
+          <div className="details">
           <div className="cert-row"><span className="k">Ratio range</span><span className="v">{pct(MIN_RATIO_BPS)} – {pct(MAX_RATIO_BPS)}</span></div>
           <div className="cert-row"><span className="k">Fee rule</span><span className="v seal">ratio ÷ 2</span></div>
-          <div className="cert-row"><span className="k">Max declared drawdown</span><span className="v">{pct(MAX_DRAWDOWN_BPS)}</span></div>
-          <p className="tiny" style={{ margin: "14px 0 0" }}>
+          <div className="cert-row"><span className="k">Max loss tolerance</span><span className="v">{pct(MAX_DRAWDOWN_BPS)}</span></div>
+          </div>
+          <p className="note">
             For every position you accept, principal × ratio of your collateral is locked until you settle.
-            Return the funds late, or lose more than your declared drawdown, and the locked amount is paid to the trader.
+            Return the funds late, or return less than the principal minus your loss tolerance, and the bond pays the trader.
             Fees are charged only on profit.
           </p>
         </div>
@@ -102,12 +107,12 @@ function RegisterForm({ actions, onDone }: { actions: Actions; onDone: () => voi
         <div className="field">
           <label>Collateral ratio · {pct(ratio)}</label>
           <input type="range" min={MIN_RATIO_BPS} max={MAX_RATIO_BPS} step={500} value={ratio} onChange={(e) => setRatio(Number(e.target.value))} />
-          <span className="hint">→ performance fee {pct(feeForRatio(ratio))} of profit</span>
+          <span className="hint">Performance fee: <span className="pos">{pct(feeForRatio(ratio))}</span> of profit</span>
         </div>
         <div className="field">
-          <label>Declared max drawdown · {pct(drawdown)}</label>
+          <label>Loss tolerance · {pct(drawdown)}</label>
           <input type="range" min={0} max={MAX_DRAWDOWN_BPS} step={500} value={drawdown} onChange={(e) => setDrawdown(Number(e.target.value))} />
-          <span className="hint">losses beyond this are slashed from your bond</span>
+          <span className="hint">Losses beyond this are paid to traders from your bond</span>
         </div>
       </div>
       <button
@@ -127,17 +132,18 @@ function Dashboard({ agent, actions, onDone }: { agent: AgentAccount; actions: A
   return (
     <div className="card rise">
       <h3>
-        {agent.name}{" "}
-        <span className="pill" style={{ verticalAlign: "middle" }}>{agent.accepting ? "accepting" : "paused"}</span>
+        <Avatar seed={agent.publicKey.toBase58()} name={agent.name} size={30} />
+        {agent.name}
+        <span className={"pill " + (agent.accepting ? "accepting" : "paused")}>{agent.accepting ? "Accepting" : "Paused"}</span>
       </h3>
       <div className="stats">
         <div className="stat"><span className="k">Ratio</span><span className="v">{pct(agent.collateralRatioBps)}</span></div>
-        <div className="stat"><span className="k">Fee</span><span className="v" style={{ color: "var(--seal)" }}>{pct(agent.feeBps)}</span></div>
+        <div className="stat"><span className="k">Fee</span><span className="v pos">{pct(agent.feeBps)}</span></div>
         <div className="stat"><span className="k">Total bond</span><span className="v">{sol(agent.totalCollateral)}<small>SOL</small></span></div>
         <div className="stat"><span className="k">Locked</span><span className="v">{sol(agent.lockedCollateral)}<small>SOL</small></span></div>
-        <div className="stat"><span className="k">Free</span><span className="v" style={{ color: "var(--bond)" }}>{sol(freeCollateral(agent))}<small>SOL</small></span></div>
+        <div className="stat"><span className="k">Free</span><span className="v cy">{sol(freeCollateral(agent))}<small>SOL</small></span></div>
         <div className="stat"><span className="k">Fees earned</span><span className="v">{sol(agent.feesEarned)}<small>SOL</small></span></div>
-        <div className="stat"><span className="k">Slashed</span><span className="v" style={{ color: agent.slashedTotal.gtn(0) ? "var(--seal)" : undefined }}>{sol(agent.slashedTotal)}<small>SOL</small></span></div>
+        <div className="stat"><span className="k">Slashed</span><span className={"v " + (agent.slashedTotal.gtn(0) ? "neg" : "")}>{sol(agent.slashedTotal)}<small>SOL</small></span></div>
       </div>
       <div className="field">
         <label>Amount (SOL)</label>
@@ -146,7 +152,7 @@ function Dashboard({ agent, actions, onDone }: { agent: AgentAccount; actions: A
       <div className="actions">
         <button className="btn" disabled={busy || !(amt > 0)} onClick={() => actions.depositCollateral(toLamports(amt)).then(onDone).catch(() => {})}>Deposit bond</button>
         <button className="btn ghost" disabled={busy || !(amt > 0)} onClick={() => actions.withdrawCollateral(toLamports(amt)).then(onDone).catch(() => {})}>Withdraw free bond</button>
-        <button className="btn ghost" disabled={busy} onClick={() => actions.setAccepting(!agent.accepting).then(onDone).catch(() => {})}>
+        <button className={"btn " + (agent.accepting ? "danger" : "ghost")} disabled={busy} onClick={() => actions.setAccepting(!agent.accepting).then(onDone).catch(() => {})}>
           {agent.accepting ? "Pause new positions" : "Resume"}
         </button>
       </div>
@@ -168,17 +174,17 @@ function AgentPositions({ agent, actions, onDone }: { agent: AgentAccount; actio
     const deadline = p.deadline.toNumber();
     const late = now >= deadline;
     return (
-      <tr className="row" key={key}>
+      <tr key={key}>
         <td>
           <div>{short(p.trader)}</div>
           <div className="tiny">{new Date(p.openedAt.toNumber() * 1000).toLocaleString()}</div>
         </td>
-        <td><span className={"pill " + p.status}>{p.status}</span></td>
+        <td><span className={"pill " + p.status} style={{ textTransform: "capitalize" }}>{p.status}</span></td>
         <td className="num">{sol(p.principal, 3)} SOL</td>
-        <td className="num" style={{ color: "var(--bond)" }}>{sol(p.lockedCollateral, 3)} SOL</td>
-        <td className="num" style={{ color: late && p.status === "trading" ? "var(--seal)" : undefined }}>
+        <td className="num cy">{sol(p.lockedCollateral, 3)} SOL</td>
+        <td className="num" style={{ color: late && p.status === "trading" ? "var(--red)" : undefined }}>
           {new Date(deadline * 1000).toLocaleString()}
-          {late && p.status === "trading" && <div className="tiny" style={{ color: "var(--seal)" }}>overdue: trader may claim</div>}
+          {late && p.status === "trading" && <div className="tiny neg">Overdue: trader may claim</div>}
         </td>
         <td className="num">
           {p.status === "open" && (
@@ -218,6 +224,7 @@ function AgentPositions({ agent, actions, onDone }: { agent: AgentAccount; actio
   };
 
   const renderTable = (rows: PositionAccount[]) => (
+    <div className="table-wrap">
     <table className="ledger">
       <thead>
         <tr>
@@ -226,6 +233,7 @@ function AgentPositions({ agent, actions, onDone }: { agent: AgentAccount; actio
       </thead>
       <tbody>{rows.map(renderRow)}</tbody>
     </table>
+    </div>
   );
 
   return (

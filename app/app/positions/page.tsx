@@ -4,6 +4,8 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useAgents, useActions, usePositions } from "@/lib/useProtocol";
 import { PositionAccount, pct, short, sol } from "@/lib/program";
 import { TxNotice } from "@/components/TxNotice";
+import { Avatar } from "@/components/Avatar";
+import { IconRefresh } from "@/components/Icons";
 
 function fmtTime(ts: number) {
   if (!ts) return "—";
@@ -21,19 +23,35 @@ export default function Positions() {
 
   if (!publicKey) return <div className="empty">Connect your wallet to see your positions.</div>;
 
+  const live = positions.filter((p) => p.status === "open" || p.status === "trading");
+  const allocated = live.reduce((n, p) => n + p.principal.toNumber(), 0);
+  const guaranteed = live.reduce((n, p) => n + p.lockedCollateral.toNumber(), 0);
+  const received = positions.reduce(
+    (n, p) => n + (p.status === "settled" || p.status === "defaulted" ? p.slashed.toNumber() : 0),
+    0,
+  );
+
   return (
     <>
+      <div className="stats rise">
+        <div className="stat"><span className="k">Active positions</span><span className="v">{live.length}</span></div>
+        <div className="stat"><span className="k">Allocated</span><span className="v">{sol(allocated)}<small>SOL</small></span></div>
+        <div className="stat"><span className="k">Guaranteed to you</span><span className="v cy">{sol(guaranteed)}<small>SOL</small></span></div>
+        <div className="stat"><span className="k">Collateral received</span><span className="v pos">{sol(received)}<small>SOL</small></span></div>
+      </div>
+      <div className="panel rise d1">
       <div className="sec-head">
         <h2>My positions</h2>
         <span className="meta">
-          {loading ? "syncing…" : `${positions.length} total`} ·{" "}
-          <button className="btn ghost sm" onClick={refresh}>refresh</button>
+          {loading ? "Syncing…" : `${positions.length} total`}
+          <button className="btn ghost sm icon-btn" onClick={refresh} aria-label="Refresh"><IconRefresh /></button>
         </span>
       </div>
       <TxNotice tx={actions.tx} />
       {positions.length === 0 && !loading ? (
         <div className="empty">You have not allocated capital to any agent yet.</div>
       ) : (
+        <div className="table-wrap">
         <table className="ledger">
           <thead>
             <tr>
@@ -52,20 +70,25 @@ export default function Positions() {
               const expired = now >= deadline;
               const payout = p.returned.toNumber() - p.feePaid.toNumber() + p.slashed.toNumber();
               return (
-                <tr key={p.publicKey.toBase58()} className="row">
+                <tr key={p.publicKey.toBase58()}>
                   <td>
-                    <div className="agent-name">{agentName(p.agent)}</div>
-                    <div className="tiny">opened {fmtTime(p.openedAt.toNumber())}</div>
+                    <div className="agent-cell">
+                      <Avatar seed={p.agent.toBase58()} name={agentName(p.agent)} />
+                      <div>
+                        <div className="agent-name">{agentName(p.agent)}</div>
+                        <div className="tiny">Opened {fmtTime(p.openedAt.toNumber())}</div>
+                      </div>
+                    </div>
                   </td>
                   <td>
-                    <span className={"pill " + p.status}>{p.status}</span>
+                    <span className={"pill " + p.status} style={{ textTransform: "capitalize" }}>{p.status}</span>
                   </td>
                   <td className="num">{sol(p.principal, 3)} SOL</td>
-                  <td className="num" style={{ color: "var(--bond)" }}>
+                  <td className="num cy">
                     {sol(p.lockedCollateral, 3)} SOL
-                    <div className="tiny">fee {pct(p.feeBps)} · dd {pct(p.maxDrawdownBps)}</div>
+                    <div className="tiny">fee {pct(p.feeBps)} · tolerance {pct(p.maxDrawdownBps)}</div>
                   </td>
-                  <td className="num hide-sm" style={{ color: expired && p.status === "trading" ? "var(--seal)" : undefined }}>
+                  <td className="num hide-sm" style={{ color: expired && p.status === "trading" ? "var(--red)" : undefined }}>
                     {fmtTime(deadline)}
                   </td>
                   <td className="num hide-sm">
@@ -74,7 +97,7 @@ export default function Positions() {
                         <div>{sol(payout, 3)} SOL to you</div>
                         <div className="tiny">
                           returned {sol(p.returned, 3)} · fee {sol(p.feePaid, 3)} ·{" "}
-                          <span style={{ color: p.slashed.gtn(0) ? "var(--seal)" : undefined }}>
+                          <span className={p.slashed.gtn(0) ? "cy" : undefined}>
                             slashed {sol(p.slashed, 3)}
                           </span>
                         </div>
@@ -85,7 +108,7 @@ export default function Positions() {
                   </td>
                   <td className="num">
                     {p.status === "open" && (
-                      <button className="btn ghost sm" onClick={() => actions.cancelPosition(p).then(refresh).catch(() => {})}>
+                      <button className="btn danger sm" onClick={() => actions.cancelPosition(p).then(refresh).catch(() => {})}>
                         Cancel
                       </button>
                     )}
@@ -105,7 +128,9 @@ export default function Positions() {
             })}
           </tbody>
         </table>
+        </div>
       )}
+      </div>
     </>
   );
 }
