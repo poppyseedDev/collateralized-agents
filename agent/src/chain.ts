@@ -45,14 +45,30 @@ export type Position = {
   status: PositionStatus;
 };
 
-export async function positionsForAgent(program: Prog, agent: PublicKey): Promise<Position[]> {
-  const raw = await program.account.position.all([{ memcmp: { offset: 40, bytes: agent.toBase58() } }]);
+/** All positions for the given agents in one scan, grouped by agent. */
+export async function positionsByAgent(program: Prog, agents: PublicKey[]): Promise<Map<string, Position[]>> {
+  const wanted = new Set(agents.map((a) => a.toBase58()));
+  const all = await allPositions(program);
+  const out = new Map<string, Position[]>([...wanted].map((k) => [k, []]));
+  for (const p of all) {
+    const k = p.agent.toBase58();
+    if (wanted.has(k)) out.get(k)!.push(p);
+  }
+  return out;
+}
+
+async function allPositions(program: Prog): Promise<Position[]> {
+  const raw = await program.account.position.all();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return raw.map((r: any) => ({
     publicKey: r.publicKey,
     ...r.account,
     status: Object.keys(r.account.status)[0] as PositionStatus,
   }));
+}
+
+export async function positionsForAgent(program: Prog, agent: PublicKey): Promise<Position[]> {
+  return (await positionsByAgent(program, [agent])).get(agent.toBase58()) ?? [];
 }
 
 export const sys = SystemProgram.programId;

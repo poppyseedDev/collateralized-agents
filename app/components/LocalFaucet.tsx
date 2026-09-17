@@ -23,6 +23,7 @@ export function LocalFaucet() {
       setTimeout(() => setState("idle"), 2000);
     } catch {
       setState("err");
+      setTimeout(() => setState("idle"), 3000);
     }
   };
 

@@ -7,7 +7,7 @@ import {
   agentVaultPda,
   connection,
   positionVaultPda,
-  positionsForAgent,
+  positionsByAgent,
   programFor,
   sys,
   type Position,
@@ -49,11 +49,10 @@ class AgentRunner {
     this.log("agent", this.agent.toBase58(), "authority", this.kp.publicKey.toBase58());
   }
 
-  async tick(price: number | null) {
+  async tick(price: number | null, positions: Position[]) {
     if (price !== null) {
       this.state.prices = [...this.state.prices, price].slice(-100);
     }
-    const positions = await positionsForAgent(this.program, this.agent);
 
     for (const p of positions) {
       const key = p.publicKey.toBase58();
@@ -258,11 +257,20 @@ async function main() {
     } catch (e) {
       console.log("price unavailable:", (e as Error).message);
     }
-    for (const r of runners) {
-      try {
-        await r.tick(price);
-      } catch (e) {
-        r.log("tick failed:", (e as Error).message);
+    let byAgent: Map<string, Position[]> | null = null;
+    try {
+      // One program scan per tick for every agent: the public RPC rate-limits this call.
+      byAgent = await positionsByAgent(runners[0].program, runners.map((r) => r.agent));
+    } catch (e) {
+      console.log("position scan failed:", (e as Error).message);
+    }
+    if (byAgent) {
+      for (const r of runners) {
+        try {
+          await r.tick(price, byAgent.get(r.agent.toBase58()) ?? []);
+        } catch (e) {
+          r.log("tick failed:", (e as Error).message);
+        }
       }
     }
     await new Promise((res) => setTimeout(res, POLL_MS));

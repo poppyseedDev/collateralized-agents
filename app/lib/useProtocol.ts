@@ -4,16 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import { useAnchorWallet, useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
+import { fetchProgramAccounts } from "./accounts";
 import {
   AgentAccount,
   PositionAccount,
   agentPda,
   agentVaultPda,
-  decodeAgent,
-  decodePosition,
   positionPda,
   positionVaultPda,
-  readonlyProgram,
   walletProgram,
 } from "./program";
 
@@ -26,24 +24,19 @@ export type AgentStats = {
 };
 
 export function useAgents() {
-  const { connection } = useConnection();
   const [agents, setAgents] = useState<AgentAccount[]>([]);
   const [stats, setStats] = useState<Record<string, AgentStats>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (fresh = false) => {
     setLoading(true);
     try {
-      const program = readonlyProgram(connection);
-      const [raw, rawPositions] = await Promise.all([
-        program.account.agent.all(),
-        program.account.position.all(),
-      ]);
-      const list = raw.map(decodeAgent) as AgentAccount[];
+      const snap = await fetchProgramAccounts(fresh === true);
+      const list = [...snap.agents];
       list.sort((a, b) => b.totalCollateral.cmp(a.totalCollateral));
       const next: Record<string, AgentStats> = {};
-      for (const p of rawPositions.map(decodePosition) as PositionAccount[]) {
+      for (const p of snap.positions) {
         if (p.status !== "settled" && p.status !== "defaulted") continue;
         const k = p.agent.toBase58();
         const s = (next[k] ??= { closed: 0, principal: 0, traderPnl: 0 });
@@ -61,45 +54,44 @@ export function useAgents() {
     } finally {
       setLoading(false);
     }
-  }, [connection]);
+  }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
-  return { agents, stats, loading, error, refresh };
+  return { agents, stats, loading, error, refresh: () => refresh(true) };
 }
 
-/** Positions filtered by a memcmp on either the trader (offset 8) or agent (offset 40). */
+/** Positions belonging to a trader or to an agent. */
 export function usePositions(filter: { trader?: PublicKey; agent?: PublicKey } | null) {
-  const { connection } = useConnection();
   const [positions, setPositions] = useState<PositionAccount[]>([]);
   const [loading, setLoading] = useState(false);
   const key = filter?.trader?.toBase58() ?? filter?.agent?.toBase58() ?? null;
   const kind = filter?.trader ? "trader" : "agent";
 
-  const refresh = useCallback(async () => {
-    if (!key) {
-      setPositions([]);
-      return;
-    }
-    setLoading(true);
-    try {
-      const program = readonlyProgram(connection);
-      const raw = await program.account.position.all([
-        { memcmp: { offset: kind === "trader" ? 8 : 40, bytes: key } },
-      ]);
-      const list = raw.map(decodePosition) as PositionAccount[];
-      list.sort((a, b) => b.openedAt.cmp(a.openedAt));
-      setPositions(list);
-    } finally {
-      setLoading(false);
-    }
-  }, [connection, key, kind]);
+  const load = useCallback(
+    async (fresh: boolean) => {
+      if (!key) {
+        setPositions([]);
+        return;
+      }
+      setLoading(true);
+      try {
+        const snap = await fetchProgramAccounts(fresh);
+        const list = snap.positions.filter((p) => (kind === "trader" ? p.trader : p.agent).toBase58() === key);
+        list.sort((a, b) => b.openedAt.cmp(a.openedAt));
+        setPositions(list);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [key, kind],
+  );
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
-  return { positions, loading, refresh };
+    load(false);
+  }, [load]);
+  return { positions, loading, refresh: () => load(true) };
 }
 
 export type TxState =
