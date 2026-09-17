@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 const SECTIONS = [
@@ -18,11 +18,22 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 
 export default function HowItWorks() {
   const [active, setActive] = useState<SectionId>("overview");
+  const tocRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const fromHash = window.location.hash.slice(1) as SectionId;
     if (SECTIONS.some((s) => s.id === fromHash)) setActive(fromHash);
   }, []);
+
+  // Keep the current section's chip visible in the scrollable strip on phones.
+  useEffect(() => {
+    const strip = tocRef.current;
+    const el = strip?.querySelector<HTMLElement>(".toc-item.on");
+    if (!el || !strip || strip.scrollWidth <= strip.clientWidth) return;
+    const a = el.getBoundingClientRect();
+    const b = strip.getBoundingClientRect();
+    strip.scrollBy({ left: a.left - b.left - (b.width - a.width) / 2 });
+  }, [active]);
 
   const go = (id: SectionId) => {
     setActive(id);
@@ -35,7 +46,7 @@ export default function HowItWorks() {
 
   return (
     <div className="docs-layout">
-      <nav className="docs-toc" aria-label="How it works">
+      <nav className="docs-toc" aria-label="How it works" ref={tocRef}>
         <div className="side-title">How it works</div>
         {SECTIONS.map((s, n) => (
           <button key={s.id} className={"toc-item" + (s.id === active ? " on" : "")} onClick={() => go(s.id)}>
@@ -46,6 +57,9 @@ export default function HowItWorks() {
       </nav>
 
       <article className="docs-body card rise" key={active}>
+        <div className="docs-progress" aria-hidden>
+          <i style={{ width: `${((i + 1) / SECTIONS.length) * 100}%` }} />
+        </div>
         <div className="eyebrow">
           {i + 1} of {SECTIONS.length}
         </div>
@@ -213,6 +227,15 @@ function Calculator() {
   );
 }
 
+const EXAMPLES: [string, string, string, string, string][] = [
+  ["12 SOL", "0", "0.3", "11.7", "2 SOL profit, 15% to the operator"],
+  ["10 SOL, SOL price −40%", "0", "0", "10", "The market fell; the agent did not lose SOL"],
+  ["9.5 SOL", "0", "0", "9.5", "Small loss within the drawdown"],
+  ["8 SOL", "1", "0", "9", "Breach: 1 SOL below the floor"],
+  ["5 SOL", "3", "0", "8", "Breach: capped at the 3 SOL reserved"],
+  ["Nothing by the deadline", "3", "0", "3", "Breach: missed deadline"],
+];
+
 function Examples() {
   return (
     <>
@@ -220,17 +243,20 @@ function Examples() {
         10 SOL allocated to an agent with a 30% collateral ratio (3 SOL reserved), a 15% fee, and a 10% maximum
         drawdown (floor 9 SOL).
       </p>
-      <table className="docs-table numbers">
+      <table className="docs-table stack">
         <thead>
           <tr><th>Agent returns</th><th>From collateral</th><th>Fee</th><th>You receive</th><th>What happened</th></tr>
         </thead>
         <tbody>
-          <tr><td>12 SOL</td><td>0</td><td>0.3</td><td>11.7</td><td>2 SOL profit, 15% to the operator</td></tr>
-          <tr><td>10 SOL, SOL price −40%</td><td>0</td><td>0</td><td>10</td><td>The market fell; the agent did not lose SOL</td></tr>
-          <tr><td>9.5 SOL</td><td>0</td><td>0</td><td>9.5</td><td>Small loss within the drawdown</td></tr>
-          <tr><td>8 SOL</td><td>1</td><td>0</td><td>9</td><td>Breach: 1 SOL below the floor</td></tr>
-          <tr><td>5 SOL</td><td>3</td><td>0</td><td>8</td><td>Breach: capped at the 3 SOL reserved</td></tr>
-          <tr><td>Nothing by the deadline</td><td>3</td><td>0</td><td>3</td><td>Breach: missed deadline</td></tr>
+          {EXAMPLES.map((r) => (
+            <tr key={r[0]}>
+              <td data-label="Agent returns">{r[0]}</td>
+              <td data-label="From collateral">{r[1]}</td>
+              <td data-label="Fee">{r[2]}</td>
+              <td data-label="You receive">{r[3]}</td>
+              <td data-label="What happened">{r[4]}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
       <p className="tiny">You also get back a small vault rent deposit, about 0.00089 SOL, when the position closes.</p>
@@ -238,17 +264,28 @@ function Examples() {
   );
 }
 
+const LIFECYCLE: [string, string, string, string][] = [
+  ["Open", "Trader", "Agent is live and has capacity", "SOL moves into the position vault; collateral is reserved"],
+  ["Cancel", "Trader", "Before the agent draws", "Full refund; collateral released"],
+  ["Decline", "Agent", "Before drawing", "Settled as if returned in full; no fee"],
+  ["Draw", "Agent", "Before the deadline", "SOL moves to the agent's trading key"],
+  ["Settle", "Agent", "After drawing", "The settlement rule applies to the SOL returned"],
+  ["Claim default", "Trader", "At or after the deadline, if not settled", "Full reserved collateral paid to the trader"],
+];
+
 function Lifecycle() {
   return (
-    <table className="docs-table">
+    <table className="docs-table stack">
       <thead><tr><th>Step</th><th>Who</th><th>When</th><th>Result</th></tr></thead>
       <tbody>
-        <tr><td>Open</td><td>Trader</td><td>Agent is live and has capacity</td><td>SOL moves into the position vault; collateral is reserved</td></tr>
-        <tr><td>Cancel</td><td>Trader</td><td>Before the agent draws</td><td>Full refund; collateral released</td></tr>
-        <tr><td>Decline</td><td>Agent</td><td>Before drawing</td><td>Settled as if returned in full; no fee</td></tr>
-        <tr><td>Draw</td><td>Agent</td><td>Before the deadline</td><td>SOL moves to the agent&apos;s trading key</td></tr>
-        <tr><td>Settle</td><td>Agent</td><td>After drawing</td><td>The settlement rule applies to the SOL returned</td></tr>
-        <tr><td>Claim default</td><td>Trader</td><td>At or after the deadline, if not settled</td><td>Full reserved collateral paid to the trader</td></tr>
+        {LIFECYCLE.map((r) => (
+          <tr key={r[0]}>
+            <td data-label="Step">{r[0]}</td>
+            <td data-label="Who">{r[1]}</td>
+            <td data-label="When">{r[2]}</td>
+            <td data-label="Result">{r[3]}</td>
+          </tr>
+        ))}
       </tbody>
     </table>
   );
