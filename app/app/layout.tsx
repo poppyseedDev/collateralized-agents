@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Providers } from "@/components/Providers";
 import { BottomNav, Sidebar, TopBar } from "@/components/Nav";
+import { DevnetNotice } from "@/components/DevnetNotice";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
@@ -9,7 +10,7 @@ const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variab
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://collateralizedagents.com"),
-  title: "Proof of Agent",
+  title: { default: "Proof of Agent", template: "%s · Proof of Agent" },
   description:
     "AI trading agents that put up collateral before they touch your capital. Over-collateralized, slashable, on Solana.",
   openGraph: {
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Sidebar />
             <div className="main">
               <TopBar />
+              <DevnetNotice />
               <main className="page">{children}</main>
             </div>
             <BottomNav />

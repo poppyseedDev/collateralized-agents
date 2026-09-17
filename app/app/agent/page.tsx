@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
-import { termsToInput, useActions, useOperatorAgents } from "@/lib/useProtocol";
+import Link from "next/link";
+import { termsToInput, useActions, useBalance, useOperatorAgents } from "@/lib/useProtocol";
 import {
   AgentAccount,
   PositionAccount,
@@ -186,6 +187,11 @@ function AgentManager({
             {STATUS_LABEL[agent.status]}
           </span>
         </h3>
+        {agent.status !== "draft" && (
+          <p className="tiny" style={{ marginTop: -8 }}>
+            <Link href={`/agents/${agent.publicKey.toBase58()}`} className="box-link">View the public agent page →</Link>
+          </p>
+        )}
         <div className="stats">
           <Stat k="Collateral" v={sol(agent.totalCollateral)} unit="SOL" />
           <Stat k="Reserved" v={sol(agent.lockedCollateral)} unit="SOL" />
@@ -233,6 +239,8 @@ function Stat({ k, v, unit, sub, tone }: { k: string; v: string; unit?: string; 
 
 function Overview({ agent, me, actions, busy, done }: { agent: AgentAccount; me: PublicKey; actions: Actions; busy: boolean; done: () => Promise<void> }) {
   const [amt, setAmt] = useState("1");
+  const balance = useBalance(me, actions.tx);
+  const maxDeposit = balance === null ? 0 : Math.max(0, balance - 0.01 * 1e9);
   const [key, setKey] = useState("");
   const lamports = toLamports(parseFloat(amt) || 0);
   const keyValid = (() => {
@@ -253,10 +261,18 @@ function Overview({ agent, me, actions, busy, done }: { agent: AgentAccount; me:
           Held in the protocol&apos;s vault. Only free collateral can be withdrawn; reserved collateral backs open
           positions. Free now: <b>{sol(freeCollateral(agent))} SOL</b>.
         </p>
+        {balance !== null && (
+          <p className="tiny">
+            Wallet balance {sol(balance)} SOL ·{" "}
+            <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => setAmt((maxDeposit / 1e9).toFixed(3))}>Deposit max</button>
+            {" · "}
+            <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => setAmt(sol(freeCollateral(agent), 3).replace(/,/g, ""))}>Withdraw all free</button>
+          </p>
+        )}
         <div className="actions">
           <input type="number" min={0} step={0.1} value={amt} onChange={(e) => setAmt(e.target.value)} style={{ width: 140 }} />
           <span className="tiny">SOL</span>
-          <button className="btn" disabled={busy || !isOperator || !(lamports > 0)}
+          <button className="btn" disabled={busy || !isOperator || !(lamports > 0) || (balance !== null && lamports > maxDeposit)}
             onClick={() => actions.depositCollateral(agent, lamports).then(done).catch(() => {})}>Deposit</button>
           <button className="btn ghost" disabled={busy || !isOperator || !(lamports > 0)}
             onClick={() => actions.withdrawCollateral(agent, lamports).then(done).catch(() => {})}>Withdraw free</button>
@@ -276,7 +292,7 @@ function Overview({ agent, me, actions, busy, done }: { agent: AgentAccount; me:
         </p>
         <div className="cert-row">
           <span className="k">Bound key</span>
-          <span className="v mono">{executorIsOperator ? "Operator wallet" : agent.executor.toBase58()}</span>
+          <span className="v mono wrap">{executorIsOperator ? "Operator wallet" : agent.executor.toBase58()}</span>
         </div>
         <div className="actions">
           <input type="text" placeholder="Trading key address" value={key} onChange={(e) => setKey(e.target.value.trim())} style={{ flex: 1, minWidth: 0 }} />
@@ -389,7 +405,10 @@ function LivePositions({ agent, positions, me, actions, busy, done }: { agent: A
                 <tr key={key}>
                   <td>
                     <div className="mono">{short(p.trader)}</div>
-                    <div className={"tiny " + (late ? "neg" : "")}>{late ? "Overdue since" : "Due"} {fmtTime(deadline)}</div>
+                    <div className={"tiny " + (late ? "neg" : "")}>
+                      {late ? "Overdue since" : "Due"} {fmtTime(deadline)}
+                      {late && p.status === "open" && " · too late to draw"}
+                    </div>
                   </td>
                   <td><span className={"pill " + p.status} style={{ textTransform: "capitalize" }}>{p.status}</span></td>
                   <td className="num">{sol(p.principal, 3)} SOL</td>
@@ -397,8 +416,12 @@ function LivePositions({ agent, positions, me, actions, busy, done }: { agent: A
                   <td className="num">
                     {p.status === "open" && (
                       <div className="actions" style={{ marginTop: 0, justifyContent: "flex-end" }}>
-                        <button className="btn sm" disabled={busy || late || !canExecute} onClick={() => actions.drawFunds(p).then(done).catch(() => {})}>Draw</button>
-                        <button className="btn ghost sm" disabled={busy || !canExecute} onClick={() => actions.settlePosition(agent, p, 0).then(done).catch(() => {})}>Decline</button>
+                        <button className="btn sm" disabled={busy || late || !canExecute}
+                          title={late ? "The deadline has passed. Decline to refund the trader." : "Move the principal to your trading key"}
+                          onClick={() => actions.drawFunds(p).then(done).catch(() => {})}>Draw</button>
+                        <button className="btn ghost sm" disabled={busy || !canExecute}
+                          title="Refund the trader in full. No fee, no breach."
+                          onClick={() => actions.settlePosition(agent, p, 0).then(done).catch(() => {})}>Decline &amp; refund</button>
                       </div>
                     )}
                     {p.status === "trading" && (

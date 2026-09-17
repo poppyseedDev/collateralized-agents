@@ -324,7 +324,7 @@ function parseAnchorError(e: unknown): string {
 export function useOperatorAgents(operator: PublicKey | null) {
   const [agents, setAgents] = useState<AgentAccount[]>([]);
   const [positions, setPositions] = useState<PositionAccount[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   /** Which operator the current data belongs to; null until the first load finishes. */
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const key = operator?.toBase58() ?? null;
@@ -334,6 +334,7 @@ export function useOperatorAgents(operator: PublicKey | null) {
       if (!key) {
         setAgents([]);
         setPositions([]);
+        setLoading(false);
         return;
       }
       setLoading(true);
@@ -356,4 +357,40 @@ export function useOperatorAgents(operator: PublicKey | null) {
     load(false);
   }, [load]);
   return { agents, positions, loading, loaded: key !== null && loadedFor === key, refresh: () => load(true) };
+}
+
+/** SOL balance of a wallet, refreshed on demand and after each confirmed transaction. */
+export const BALANCE_EVENT = "poa:balance-changed";
+
+export function useBalance(owner: PublicKey | null, tx?: TxState) {
+  const { connection } = useConnection();
+  const [lamports, setLamports] = useState<number | null>(null);
+  const [tick, setTick] = useState(0);
+  const key = owner?.toBase58() ?? null;
+  const okSig = tx?.kind === "ok" ? tx.sig : null;
+  // Refresh when another part of the app changes the balance (e.g. the local faucet) or the tab regains focus.
+  useEffect(() => {
+    const bump = () => setTick((t) => t + 1);
+    window.addEventListener(BALANCE_EVENT, bump);
+    window.addEventListener("focus", bump);
+    return () => {
+      window.removeEventListener(BALANCE_EVENT, bump);
+      window.removeEventListener("focus", bump);
+    };
+  }, []);
+  useEffect(() => {
+    if (!key) {
+      setLamports(null);
+      return;
+    }
+    let cancelled = false;
+    connection
+      .getBalance(new PublicKey(key), "confirmed")
+      .then((n) => !cancelled && setLamports(n))
+      .catch(() => !cancelled && setLamports(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, key, okSig, tick]);
+  return lamports;
 }

@@ -130,7 +130,9 @@ export default function Marketplace() {
                             <Avatar seed={a.publicKey.toBase58()} name={a.name} />
                             <div>
                               <div className="agent-name">
-                                {a.name}
+                                <Link href={`/agents/${a.publicKey.toBase58()}`} className="name-link" onClick={(e) => e.stopPropagation()}>
+                                  {a.name}
+                                </Link>
                                 {a.status === "paused" && <span className="pill paused">Paused</span>}
                               </div>
                               <div className="agent-strategy">{a.description || short(a.operator)}</div>
@@ -186,6 +188,7 @@ export default function Marketplace() {
             agent={selected}
             connected={actions.connected}
             busy={actions.tx.kind === "pending"}
+            tx={actions.tx}
             onOpen={async (lamports, secs) => {
               if (!selected) return;
               try {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAgents, useActions, usePositions } from "@/lib/useProtocol";
 import { PositionAccount, pct, short, sol } from "@/lib/program";
@@ -106,7 +107,9 @@ export default function Positions() {
                     <div className="agent-cell">
                       <Avatar seed={p.agent.toBase58()} name={agentName(p.agent)} />
                       <div>
-                        <div className="agent-name">{agentName(p.agent)}</div>
+                        <div className="agent-name">
+                          <Link href={`/agents/${p.agent.toBase58()}`} className="name-link">{agentName(p.agent)}</Link>
+                        </div>
                         <div className="tiny">
                           {p.status === "open" || p.status === "trading" ? (
                             <span className={expired && p.status === "trading" ? "neg" : undefined}>

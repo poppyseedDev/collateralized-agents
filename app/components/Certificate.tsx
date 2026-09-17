@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { useBalance, type TxState } from "@/lib/useProtocol";
 import {
   AgentAccount,
   assetLabel,
@@ -40,21 +43,33 @@ export function Certificate({
   agent,
   connected,
   busy,
+  tx,
   onOpen,
 }: {
   agent: AgentAccount | null;
   connected: boolean;
   busy: boolean;
+  /** Latest transaction state; a confirmed one refreshes the balance. */
+  tx?: TxState;
   onOpen: (lamports: number, durationSecs: number) => void;
 }) {
   const [amount, setAmount] = useState("1");
   const [picked, setPicked] = useState<number | null>(null);
   const [showRules, setShowRules] = useState(false);
+  const { publicKey } = useWallet();
+  const balance = useBalance(publicKey ?? null, tx);
+  // Leave a little SOL for fees and the position vault's rent deposit.
+  const maxLamports = balance === null ? 0 : Math.max(0, balance - 0.01 * 1e9);
 
   const head = (
     <div className="cert-head">
       <div className="cert-tabs">
         <span className="cert-tab active">Allocate</span>
+        {agent && (
+          <Link href={`/agents/${agent.publicKey.toBase58()}`} className="cert-agent box-link">
+            to {agent.name}
+          </Link>
+        )}
       </div>
       <span className="stamp">
         <IconShield width={12} height={12} /> Bonded
@@ -84,6 +99,7 @@ export function Certificate({
   const guaranteed = requiredCollateral(lamports, agent.terms.collateralRatioBps);
   const cap = capacity(agent);
   const overCap = lamports > cap;
+  const overBalance = balance !== null && lamports > maxLamports;
   const tolerance = Math.floor((lamports * agent.terms.maxDrawdownBps) / 10_000);
 
   const label = !connected
@@ -94,6 +110,8 @@ export function Certificate({
         ? "Enter an amount"
         : overCap
           ? "Exceeds agent capacity"
+          : overBalance
+            ? "Not enough SOL"
           : busy
             ? "Confirming…"
             : "Allocate";
@@ -105,7 +123,12 @@ export function Certificate({
       <div className="box">
         <div className="box-label">
           <span>You allocate</span>
-          <span>to {agent.name}</span>
+          {balance !== null && (
+            <span className="box-balance">
+              Balance {sol(balance)} SOL
+              <button type="button" className="max-btn" onClick={() => setAmount((maxLamports / 1e9).toFixed(3))}>Max</button>
+            </span>
+          )}
         </div>
         <div className="box-row">
           <input
@@ -192,7 +215,7 @@ export function Certificate({
 
       <button
         className="btn lg"
-        disabled={!connected || busy || overCap || agent.status !== "active" || !(lamports > 0)}
+        disabled={!connected || busy || overCap || overBalance || agent.status !== "active" || !(lamports > 0)}
         onClick={() => onOpen(lamports, duration)}
       >
         {label}
