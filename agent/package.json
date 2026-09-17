@@ -1,0 +1,25 @@
+{
+  "name": "collateralized-agents-runner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "tsx src/setup.ts",
+    "start": "tsx src/runner.ts",
+    "seed-positions": "tsx src/seed-positions.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@orca-so/tx-sender": "^3.0.1",
+    "@orca-so/whirlpools": "^8.0.1",
+    "@orca-so/whirlpools-client": "^7.0.0",
+    "@orca-so/whirlpools-core": "^3.1.0",
+    "@solana/kit": "^5.5.1",
+    "@solana/web3.js": "^1.99.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
+  }
+}

@@ -30,9 +30,15 @@ slashing rules, worked examples, and planned extensions.
 ```
 programs/collateralized_agents   Anchor program (Rust) + LiteSVM tests
 app/                             Next.js frontend (wallet adapter + Anchor client)
+agent/                           Agent runner: devnet agents trading on Orca
+docs/                            Protocol docs
 ```
 
 Program id (devnet & localnet): `49aHwbzdT1iN8WYWdUZxrGoZpjSryyugMm4q9VTjXgSr`
+
+The program is deployed on devnet, and three agents run there from
+[agent/](agent/README.md). They trade traders' SOL on Orca's devnet pools and
+settle through the program.
 
 ## Local development
 
@@ -73,18 +79,21 @@ and copy the IDL: `cp target/idl/collateralized_agents.json app/lib/idl.json`.
 
 ## Devnet
 
-The program is not on devnet yet (deploy needs ~1.3 SOL of rent deposit; the
-deploy wallet is `SGzzPobm6doLkxhub7tFKEFiC8JPEZjYarA6cxWbb8w`). When funded:
+The program is deployed on devnet with room for upgrades up to 320 KB. The
+upgrade authority is the deploy wallet
+`SGzzPobm6doLkxhub7tFKEFiC8JPEZjYarA6cxWbb8w`. To upgrade:
 
 ```bash
+anchor build
 solana program deploy target/deploy/collateralized_agents.so \
-  --program-id target/deploy/collateralized_agents-keypair.json \
-  --max-len 256384 -u devnet
+  --program-id target/deploy/collateralized_agents-keypair.json -u devnet
 ```
 
 The Vercel deployment reads `NEXT_PUBLIC_RPC_URL` / `NEXT_PUBLIC_CLUSTER`
-(defaults to public devnet), so the live site populates as soon as the program
-exists there.
+and defaults to public devnet.
+
+Agents on devnet: `npm run agents:setup`, then `npm run agents:start`. See
+[agent/README.md](agent/README.md).
 
 ## Trust model (v1)
 

@@ -9,6 +9,9 @@
     "validator": "solana-test-validator --reset --quiet --ledger test-ledger",
     "deploy:local": "anchor build && anchor deploy --provider.cluster localnet && cp target/idl/collateralized_agents.json app/lib/idl.json",
     "test": "cargo test --manifest-path programs/collateralized_agents/Cargo.toml",
-    "test:localnet": "npm --prefix app run test:localnet"
+    "test:localnet": "npm --prefix app run test:localnet",
+    "agents:setup": "npm --prefix agent run setup",
+    "agents:start": "npm --prefix agent start",
+    "agents:seed": "npm --prefix agent run seed-positions --"
   }
 }
