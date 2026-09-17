@@ -100,7 +100,6 @@ export default function Marketplace() {
                     <th className="num">Collateral</th>
                     <th className="num">Fee</th>
                     <th className="num hide-sm">Available bond</th>
-                    <th className="num hide-sm hide-md">Trader return</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -133,10 +132,16 @@ export default function Marketplace() {
                                 {!a.accepting && <span className="pill paused">Paused</span>}
                               </div>
                               <div className="agent-strategy">{a.strategy || short(a.authority)}</div>
-                              <div className="tiny show-md">
-                                {retText && <span className={ret! >= 0 ? "pos" : "neg"}>{retText} to traders · </span>}
+                              <div className="tiny">
+                                {retText ? (
+                                  <span className={"ret " + (ret! >= 0 ? "pos" : "neg")}>{retText} to traders</span>
+                                ) : (
+                                  <span>No history yet</span>
+                                )}
+                                {" · "}
                                 {a.settledPositions} settled · {a.openPositions} open
                                 {a.defaultedPositions > 0 && <span className="neg"> · {a.defaultedPositions} defaulted</span>}
+                                {a.slashedTotal.gtn(0) && <span className="neg"> · {sol(a.slashedTotal)} slashed</span>}
                               </div>
                             </div>
                           </div>
@@ -157,18 +162,6 @@ export default function Marketplace() {
                             <i className={used > 0.9 ? "warn" : ""} style={{ width: `${Math.max(100 - used * 100, 0)}%` }} />
                           </div>
                           <div className="tiny">Capacity {sol(capacity(a))} SOL</div>
-                        </td>
-                        <td className="num hide-sm hide-md">
-                          {retText ? (
-                            <div className={"big " + (ret! >= 0 ? "pos" : "neg")}>{retText}</div>
-                          ) : (
-                            <div className="tiny">No history yet</div>
-                          )}
-                          <div className="tiny">
-                            {a.settledPositions} settled · {a.openPositions} open
-                            {a.defaultedPositions > 0 && <span className="neg"> · {a.defaultedPositions} defaulted</span>}
-                            {a.slashedTotal.gtn(0) && <span className="neg"> · {sol(a.slashedTotal)} slashed</span>}
-                          </div>
                         </td>
                       </tr>
                     );

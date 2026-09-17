@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { CLUSTER } from "@/lib/program";
+import { IconDrop } from "./Icons";
 
 /** Localnet-only: airdrop 10 SOL to the connected wallet. */
 export function LocalFaucet() {
@@ -26,8 +27,11 @@ export function LocalFaucet() {
   };
 
   return (
-    <button className="btn ghost sm" onClick={drop} disabled={state === "busy"} title={publicKey.toBase58()}>
-      {state === "busy" ? "Airdropping…" : state === "done" ? "+10 SOL" : state === "err" ? "Airdrop failed" : "Airdrop 10 SOL"}
+    <button className="btn ghost sm faucet" onClick={drop} disabled={state === "busy"} title={`Airdrop 10 SOL to ${publicKey.toBase58()}`}>
+      <IconDrop width={14} height={14} />
+      <span className="faucet-label">
+        {state === "busy" ? "Airdropping…" : state === "done" ? "+10 SOL" : state === "err" ? "Airdrop failed" : "Airdrop 10 SOL"}
+      </span>
     </button>
   );
 }
