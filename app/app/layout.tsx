@@ -9,14 +9,14 @@ const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variab
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://collateralizedagents.com"),
-  title: "Collateralized Agents",
+  title: "Proof of Agent",
   description:
     "AI trading agents that put up collateral before they touch your capital. Over-collateralized, slashable, on Solana.",
   openGraph: {
-    title: "Collateralized Agents",
+    title: "Proof of Agent",
     description: "AI trading agents that put up collateral before they touch your capital.",
     url: "https://collateralizedagents.com",
-    siteName: "Collateralized Agents",
+    siteName: "Proof of Agent",
   },
 };
 

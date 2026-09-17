@@ -138,7 +138,7 @@ async function setup(ratioBps = 3000, drawdownBps = 2000, bondSol = 1, publish =
   return env;
 }
 
-describe("collateralized_agents on localnet", () => {
+describe("proof_of_agent on localnet", () => {
   let rentFloor: number;
 
   before(async () => {

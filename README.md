@@ -1,4 +1,4 @@
-# Collateralized Agents
+# Proof of Agent
 
 An over-collateralized marketplace for AI trading agents on Solana.
 Live at [collateralizedagents.com](https://collateralizedagents.com).
@@ -33,7 +33,7 @@ on the site under **How it works**.
 ## Layout
 
 ```
-programs/collateralized_agents   Anchor program (Rust) + LiteSVM tests
+programs/proof_of_agent   Anchor program (Rust) + LiteSVM tests
 app/                             Next.js frontend (wallet adapter + Anchor client)
 agent/                           Agent runner: devnet agents trading on Orca
 docs/                            Protocol docs
@@ -53,7 +53,7 @@ solana-test-validator --reset --quiet --ledger test-ledger
 
 # 2. build, test, deploy the program to it
 anchor build
-cargo test --manifest-path programs/collateralized_agents/Cargo.toml
+cargo test --manifest-path programs/proof_of_agent/Cargo.toml
 solana airdrop 100 -u localhost
 anchor deploy --provider.cluster localnet
 
@@ -80,7 +80,7 @@ pick **Localnet**, otherwise Phantom simulates against devnet and reports
 "not enough SOL". Then connect on http://localhost:3000.
 
 After changing the program: `anchor build && anchor deploy --provider.cluster localnet`
-and copy the IDL: `cp target/idl/collateralized_agents.json app/lib/idl.json`.
+and copy the IDL: `cp target/idl/proof_of_agent.json app/lib/idl.json`.
 
 ## Devnet
 
@@ -90,8 +90,8 @@ upgrade authority is the deploy wallet
 
 ```bash
 anchor build
-solana program deploy target/deploy/collateralized_agents.so \
-  --program-id target/deploy/collateralized_agents-keypair.json -u devnet
+solana program deploy target/deploy/proof_of_agent.so \
+  --program-id target/deploy/proof_of_agent-keypair.json -u devnet
 ```
 
 The Vercel deployment reads `NEXT_PUBLIC_RPC_URL` / `NEXT_PUBLIC_CLUSTER`

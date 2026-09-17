@@ -4,7 +4,7 @@ use {
         solana_program::{instruction::Instruction, system_program},
         AccountDeserialize, InstructionData, ToAccountMetas,
     },
-    collateralized_agents::{
+    proof_of_agent::{
         constants::*,
         state::{Agent, AgentStatus, AgentTerms, Breach, Position, PositionStatus},
     },
@@ -43,9 +43,9 @@ struct Env {
 
 impl Env {
     fn new() -> Self {
-        let program_id = collateralized_agents::id();
+        let program_id = proof_of_agent::id();
         let mut svm = LiteSVM::new();
-        let bytes = include_bytes!(concat!(env!("CARGO_TARGET_TMPDIR"), "/../deploy/collateralized_agents.so"));
+        let bytes = include_bytes!(concat!(env!("CARGO_TARGET_TMPDIR"), "/../deploy/proof_of_agent.so"));
         svm.add_program(program_id, bytes).unwrap();
         // The simulated clock starts at 0; use a realistic date.
         let mut clock: Clock = svm.get_sysvar();
@@ -118,14 +118,14 @@ impl Env {
     fn create(&mut self, t: AgentTerms) -> Result<(), String> {
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::CreateAgent {
+            &proof_of_agent::instruction::CreateAgent {
                 agent_id: self.agent_id,
                 name: "Momentum Bot".into(),
                 description: "SOL/USDC momentum".into(),
                 terms: t,
             }
             .data(),
-            collateralized_agents::accounts::CreateAgent {
+            proof_of_agent::accounts::CreateAgent {
                 operator: self.operator.pubkey(),
                 agent: self.agent,
                 agent_vault: self.agent_vault,
@@ -140,13 +140,13 @@ impl Env {
     fn update(&mut self, t: AgentTerms, signer: &Keypair) -> Result<(), String> {
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::UpdateAgent {
+            &proof_of_agent::instruction::UpdateAgent {
                 name: "Momentum Bot v2".into(),
                 description: "edited".into(),
                 terms: t,
             }
             .data(),
-            collateralized_agents::accounts::UpdateAgent { operator: signer.pubkey(), agent: self.agent }
+            proof_of_agent::accounts::UpdateAgent { operator: signer.pubkey(), agent: self.agent }
                 .to_account_metas(None),
         );
         self.send(ix, signer)
@@ -155,8 +155,8 @@ impl Env {
     fn publish(&mut self) -> Result<(), String> {
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::PublishAgent {}.data(),
-            collateralized_agents::accounts::PublishAgent { operator: self.operator.pubkey(), agent: self.agent }
+            &proof_of_agent::instruction::PublishAgent {}.data(),
+            proof_of_agent::accounts::PublishAgent { operator: self.operator.pubkey(), agent: self.agent }
                 .to_account_metas(None),
         );
         let s = self.op();
@@ -166,8 +166,8 @@ impl Env {
     fn bind_executor(&mut self, executor: Pubkey, signer: &Keypair) -> Result<(), String> {
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::SetExecutor { executor }.data(),
-            collateralized_agents::accounts::SetExecutor { operator: signer.pubkey(), agent: self.agent }
+            &proof_of_agent::instruction::SetExecutor { executor }.data(),
+            proof_of_agent::accounts::SetExecutor { operator: signer.pubkey(), agent: self.agent }
                 .to_account_metas(None),
         );
         self.send(ix, signer)
@@ -176,8 +176,8 @@ impl Env {
     fn set_accepting(&mut self, accepting: bool) -> Result<(), String> {
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::SetAccepting { accepting }.data(),
-            collateralized_agents::accounts::SetAccepting { operator: self.operator.pubkey(), agent: self.agent }
+            &proof_of_agent::instruction::SetAccepting { accepting }.data(),
+            proof_of_agent::accounts::SetAccepting { operator: self.operator.pubkey(), agent: self.agent }
                 .to_account_metas(None),
         );
         let s = self.op();
@@ -187,8 +187,8 @@ impl Env {
     fn deposit(&mut self, amount: u64) -> Result<(), String> {
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::DepositCollateral { amount }.data(),
-            collateralized_agents::accounts::DepositCollateral {
+            &proof_of_agent::instruction::DepositCollateral { amount }.data(),
+            proof_of_agent::accounts::DepositCollateral {
                 operator: self.operator.pubkey(),
                 agent: self.agent,
                 agent_vault: self.agent_vault,
@@ -203,8 +203,8 @@ impl Env {
     fn withdraw(&mut self, amount: u64) -> Result<(), String> {
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::WithdrawCollateral { amount }.data(),
-            collateralized_agents::accounts::WithdrawCollateral {
+            &proof_of_agent::instruction::WithdrawCollateral { amount }.data(),
+            proof_of_agent::accounts::WithdrawCollateral {
                 operator: self.operator.pubkey(),
                 agent: self.agent,
                 agent_vault: self.agent_vault,
@@ -231,8 +231,8 @@ impl Env {
         let (position, position_vault) = self.position_pda(nonce);
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::DrawFunds {}.data(),
-            collateralized_agents::accounts::DrawFunds {
+            &proof_of_agent::instruction::DrawFunds {}.data(),
+            proof_of_agent::accounts::DrawFunds {
                 executor: signer.pubkey(),
                 agent: self.agent,
                 position,
@@ -248,8 +248,8 @@ impl Env {
         let (position, position_vault) = self.position_pda(nonce);
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::SettlePosition { returned }.data(),
-            collateralized_agents::accounts::SettlePosition {
+            &proof_of_agent::instruction::SettlePosition { returned }.data(),
+            proof_of_agent::accounts::SettlePosition {
                 executor: signer.pubkey(),
                 operator: self.operator.pubkey(),
                 agent: self.agent,
@@ -270,8 +270,8 @@ impl Env {
         let (position, position_vault) = self.position_pda(nonce);
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::OpenPosition { nonce, amount, duration_secs: duration }.data(),
-            collateralized_agents::accounts::OpenPosition {
+            &proof_of_agent::instruction::OpenPosition { nonce, amount, duration_secs: duration }.data(),
+            proof_of_agent::accounts::OpenPosition {
                 trader: self.trader.pubkey(),
                 agent: self.agent,
                 position,
@@ -288,8 +288,8 @@ impl Env {
         let (position, position_vault) = self.position_pda(nonce);
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::ClaimDefault {}.data(),
-            collateralized_agents::accounts::ClaimDefault {
+            &proof_of_agent::instruction::ClaimDefault {}.data(),
+            proof_of_agent::accounts::ClaimDefault {
                 trader: self.trader.pubkey(),
                 agent: self.agent,
                 agent_vault: self.agent_vault,
@@ -307,8 +307,8 @@ impl Env {
         let (position, position_vault) = self.position_pda(nonce);
         let ix = Instruction::new_with_bytes(
             self.program_id,
-            &collateralized_agents::instruction::CancelPosition {}.data(),
-            collateralized_agents::accounts::CancelPosition {
+            &proof_of_agent::instruction::CancelPosition {}.data(),
+            proof_of_agent::accounts::CancelPosition {
                 trader: self.trader.pubkey(),
                 agent: self.agent,
                 position,

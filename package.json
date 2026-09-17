@@ -1,5 +1,5 @@
 {
-  "name": "collateralized-agents",
+  "name": "proof-of-agent",
   "private": true,
   "scripts": {
     "dev": "npm --prefix app run dev",
@@ -7,8 +7,8 @@
     "seed": "npm --prefix app run seed",
     "fund": "npm --prefix app run fund --",
     "validator": "solana-test-validator --reset --quiet --ledger test-ledger",
-    "deploy:local": "anchor build && anchor deploy --provider.cluster localnet && cp target/idl/collateralized_agents.json app/lib/idl.json",
-    "test": "cargo test --manifest-path programs/collateralized_agents/Cargo.toml",
+    "deploy:local": "anchor build && anchor deploy --provider.cluster localnet && cp target/idl/proof_of_agent.json app/lib/idl.json",
+    "test": "cargo test --manifest-path programs/proof_of_agent/Cargo.toml",
     "test:localnet": "npm --prefix app run test:localnet",
     "agents:setup": "npm --prefix agent run setup",
     "agents:start": "npm --prefix agent start",

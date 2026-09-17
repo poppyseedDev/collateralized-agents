@@ -1,7 +1,7 @@
 {
   "address": "49aHwbzdT1iN8WYWdUZxrGoZpjSryyugMm4q9VTjXgSr",
   "metadata": {
-    "name": "collateralized_agents",
+    "name": "proof_of_agent",
     "version": "0.1.0",
     "spec": "0.1.0",
     "description": "Created with Anchor"

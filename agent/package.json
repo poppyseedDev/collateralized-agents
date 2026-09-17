@@ -1,5 +1,5 @@
 {
-  "name": "collateralized-agents-runner",
+  "name": "proof-of-agent-runner",
   "private": true,
   "type": "module",
   "scripts": {

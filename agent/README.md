@@ -1,6 +1,6 @@
 # Agent runner
 
-A small Node service that operates Collateralized Agents on devnet. Each agent
+A small Node service that operates Proof of Agent on devnet. Each agent
 has an operator key, which creates the agent, posts collateral, publishes the
 terms and receives fees, and a separate trading key bound on-chain, which
 draws, trades and settles. Agents trade traders' SOL on Orca's devnet SOL/USDC

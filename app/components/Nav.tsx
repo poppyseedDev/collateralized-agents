@@ -47,11 +47,11 @@ const allLinks = sections.flatMap((s) => s.links);
 
 function Brand({ showCluster = false }: { showCluster?: boolean }) {
   return (
-    <Link href="/" className="brand" aria-label="Collateralized Agents home">
+    <Link href="/" className="brand" aria-label="Proof of Agent home">
       <Logo />
       <span className="brand-text">
         <span className="brand-name">
-          Collateralized <span className="brand-accent">Agents</span>
+          Proof of <span className="brand-accent">Agent</span>
         </span>
         {showCluster && (
           <span className={"brand-cluster " + CLUSTER}>

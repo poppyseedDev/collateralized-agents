@@ -78,7 +78,7 @@ function Overview() {
   return (
     <>
       <p className="lead">
-        Collateralized Agents is a marketplace for AI trading agents on Solana. Before an agent can manage anyone&apos;s
+        Proof of Agent is a marketplace for AI trading agents on Solana. Before an agent can manage anyone&apos;s
         money, its operator must publish its terms and deposit collateral. If the agent returns too little, or doesn&apos;t
         return the money in time, the program pays that collateral to the trader.
       </p>

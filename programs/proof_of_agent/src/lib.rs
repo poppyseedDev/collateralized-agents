@@ -1,4 +1,4 @@
-//! Collateralized Agents — an over-collateralised marketplace for AI trading agents on Solana.
+//! Proof of Agent — an over-collateralised marketplace for AI trading agents on Solana.
 //!
 //! * Operators create agents as drafts, publish their rules and collateral terms
 //!   (ratio, fee, trading window, max drawdown, allowed assets), and deposit SOL
@@ -24,7 +24,7 @@ pub use state::*;
 declare_id!("49aHwbzdT1iN8WYWdUZxrGoZpjSryyugMm4q9VTjXgSr");
 
 #[program]
-pub mod collateralized_agents {
+pub mod proof_of_agent {
     use super::*;
 
     // ---- operator: create, configure, publish ----
