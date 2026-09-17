@@ -1,13 +1,26 @@
 use anchor_lang::prelude::*;
 
-use crate::state::PositionStatus;
+use crate::state::{AgentTerms, Breach, PositionStatus};
 
 #[event]
-pub struct AgentRegistered {
+pub struct AgentCreated {
     pub agent: Pubkey,
-    pub authority: Pubkey,
-    pub collateral_ratio_bps: u16,
-    pub fee_bps: u16,
+    pub operator: Pubkey,
+    pub agent_id: u64,
+}
+
+#[event]
+pub struct AgentPublished {
+    pub agent: Pubkey,
+    pub operator: Pubkey,
+    pub terms: AgentTerms,
+    pub collateral: u64,
+}
+
+#[event]
+pub struct ExecutorBound {
+    pub agent: Pubkey,
+    pub executor: Pubkey,
 }
 
 #[event]
@@ -33,8 +46,17 @@ pub struct PositionClosed {
     pub agent: Pubkey,
     pub trader: Pubkey,
     pub status: PositionStatus,
+    pub breach: Breach,
     pub returned: u64,
     pub slashed: u64,
     pub fee_paid: u64,
     pub trader_payout: u64,
+}
+
+#[event]
+pub struct BreachRecorded {
+    pub agent: Pubkey,
+    pub position: Pubkey,
+    pub breach: Breach,
+    pub slashed: u64,
 }

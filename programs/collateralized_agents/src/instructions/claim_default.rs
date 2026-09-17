@@ -3,8 +3,8 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::*,
     error::ErrorCode,
-    events::PositionClosed,
-    state::{Agent, Position, PositionStatus},
+    events::{BreachRecorded, PositionClosed},
+    state::{Agent, Breach, Position, PositionStatus},
 };
 
 /// The agent drew the funds and did not settle before the deadline. The
@@ -15,7 +15,7 @@ pub struct ClaimDefault<'info> {
     pub trader: Signer<'info>,
     #[account(
         mut,
-        seeds = [AGENT_SEED, agent.authority.as_ref()],
+        seeds = [AGENT_SEED, agent.operator.as_ref(), &agent.agent_id.to_le_bytes()],
         bump = agent.bump,
     )]
     pub agent: Account<'info, Agent>,
@@ -30,7 +30,7 @@ pub struct ClaimDefault<'info> {
         seeds = [POSITION_SEED, agent.key().as_ref(), trader.key().as_ref(), &position.nonce.to_le_bytes()],
         bump = position.bump,
         has_one = trader @ ErrorCode::UnauthorizedTrader,
-        constraint = position.agent == agent.key() @ ErrorCode::UnauthorizedAgent,
+        constraint = position.agent == agent.key() @ ErrorCode::InvalidStatus,
     )]
     pub position: Account<'info, Position>,
     #[account(
@@ -80,20 +80,29 @@ pub fn handle_claim_default(ctx: Context<ClaimDefault>) -> Result<()> {
     agent.capital_managed -= position.principal;
     agent.open_positions -= 1;
     agent.defaulted_positions += 1;
+    agent.breach_count += 1;
     agent.slashed_total = agent
         .slashed_total
         .checked_add(slash)
         .ok_or(ErrorCode::Overflow)?;
 
     position.status = PositionStatus::Defaulted;
+    position.breach = Breach::MissedDeadline;
     position.slashed = slash;
     position.closed_at = now;
 
+    emit!(BreachRecorded {
+        agent: agent_key,
+        position: position_key,
+        breach: Breach::MissedDeadline,
+        slashed: slash,
+    });
     emit!(PositionClosed {
         position: position_key,
         agent: agent_key,
         trader: position.trader,
         status: PositionStatus::Defaulted,
+        breach: Breach::MissedDeadline,
         returned: 0,
         slashed: slash,
         fee_paid: 0,

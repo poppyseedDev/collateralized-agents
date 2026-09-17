@@ -4,7 +4,7 @@ use crate::{
     constants::*,
     error::ErrorCode,
     events::PositionClosed,
-    state::{Agent, Position, PositionStatus},
+    state::{Agent, Breach, Position, PositionStatus},
 };
 
 /// The trader withdraws before the agent has drawn the funds. No fee, no slash.
@@ -14,7 +14,7 @@ pub struct CancelPosition<'info> {
     pub trader: Signer<'info>,
     #[account(
         mut,
-        seeds = [AGENT_SEED, agent.authority.as_ref()],
+        seeds = [AGENT_SEED, agent.operator.as_ref(), &agent.agent_id.to_le_bytes()],
         bump = agent.bump,
     )]
     pub agent: Account<'info, Agent>,
@@ -23,7 +23,7 @@ pub struct CancelPosition<'info> {
         seeds = [POSITION_SEED, agent.key().as_ref(), trader.key().as_ref(), &position.nonce.to_le_bytes()],
         bump = position.bump,
         has_one = trader @ ErrorCode::UnauthorizedTrader,
-        constraint = position.agent == agent.key() @ ErrorCode::UnauthorizedAgent,
+        constraint = position.agent == agent.key() @ ErrorCode::InvalidStatus,
     )]
     pub position: Account<'info, Position>,
     #[account(
@@ -65,6 +65,7 @@ pub fn handle_cancel_position(ctx: Context<CancelPosition>) -> Result<()> {
         agent: agent.key(),
         trader: position.trader,
         status: PositionStatus::Cancelled,
+        breach: Breach::None,
         returned: position.principal,
         slashed: 0,
         fee_paid: 0,

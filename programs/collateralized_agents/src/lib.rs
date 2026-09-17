@@ -1,7 +1,9 @@
 //! Collateralized Agents — an over-collateralised marketplace for AI trading agents on Solana.
 //!
-//! * Agents register with a collateral ratio (e.g. 30%) and deposit SOL collateral.
-//! * The higher the ratio an agent guarantees, the higher the performance fee it earns.
+//! * Operators create agents as drafts, publish their rules and collateral terms
+//!   (ratio, fee, trading window, max drawdown, allowed assets), and deposit SOL
+//!   collateral. Published terms are permanent.
+//! * The higher the ratio an agent guarantees, the higher the fee it may charge.
 //! * When a trader allocates capital, `principal * ratio` of the agent's collateral is
 //!   locked as a guarantee. An agent cannot accept capital it cannot back.
 //! * If the agent misbehaves (loses beyond its declared drawdown, or never returns the
@@ -25,22 +27,37 @@ declare_id!("49aHwbzdT1iN8WYWdUZxrGoZpjSryyugMm4q9VTjXgSr");
 pub mod collateralized_agents {
     use super::*;
 
-    // ---- agent side ----
+    // ---- operator: create, configure, publish ----
 
-    pub fn register_agent(
-        ctx: Context<RegisterAgent>,
+    pub fn create_agent(
+        ctx: Context<CreateAgent>,
+        agent_id: u64,
         name: String,
-        strategy: String,
-        collateral_ratio_bps: u16,
-        max_drawdown_bps: u16,
+        description: String,
+        terms: AgentTerms,
     ) -> Result<()> {
-        instructions::register_agent::handle_register_agent(
-            ctx,
-            name,
-            strategy,
-            collateral_ratio_bps,
-            max_drawdown_bps,
-        )
+        instructions::create_agent::handle_create_agent(ctx, agent_id, name, description, terms)
+    }
+
+    pub fn update_agent(
+        ctx: Context<UpdateAgent>,
+        name: String,
+        description: String,
+        terms: AgentTerms,
+    ) -> Result<()> {
+        instructions::update_agent::handle_update_agent(ctx, name, description, terms)
+    }
+
+    pub fn publish_agent(ctx: Context<PublishAgent>) -> Result<()> {
+        instructions::publish_agent::handle_publish_agent(ctx)
+    }
+
+    pub fn set_executor(ctx: Context<SetExecutor>, executor: Pubkey) -> Result<()> {
+        instructions::set_executor::handle_set_executor(ctx, executor)
+    }
+
+    pub fn set_accepting(ctx: Context<SetAccepting>, accepting: bool) -> Result<()> {
+        instructions::set_accepting::handle_set_accepting(ctx, accepting)
     }
 
     pub fn deposit_collateral(ctx: Context<DepositCollateral>, amount: u64) -> Result<()> {
@@ -51,9 +68,7 @@ pub mod collateralized_agents {
         instructions::withdraw_collateral::handle_withdraw_collateral(ctx, amount)
     }
 
-    pub fn set_accepting(ctx: Context<SetAccepting>, accepting: bool) -> Result<()> {
-        instructions::set_accepting::handle_set_accepting(ctx, accepting)
-    }
+    // ---- agent trading key ----
 
     pub fn draw_funds(ctx: Context<DrawFunds>) -> Result<()> {
         instructions::draw_funds::handle_draw_funds(ctx)
@@ -63,7 +78,7 @@ pub mod collateralized_agents {
         instructions::settle_position::handle_settle_position(ctx, returned)
     }
 
-    // ---- trader side ----
+    // ---- trader ----
 
     pub fn open_position(
         ctx: Context<OpenPosition>,

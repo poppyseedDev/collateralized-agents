@@ -3,25 +3,28 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::*,
     error::ErrorCode,
-    events::PositionClosed,
-    state::{Agent, Position, PositionStatus},
+    events::{BreachRecorded, PositionClosed},
+    state::{Agent, Breach, Position, PositionStatus},
 };
 
-/// The agent returns `returned` lamports to the trader and the position is
+/// The agent's trading key returns `returned` lamports and the position is
 /// closed. Outcomes:
-///   * profit  -> agent keeps `fee_bps` of the profit, trader gets the rest
-///   * loss within max_drawdown -> normal trading loss, no fee, no slash
-///   * loss beyond max_drawdown -> misbehaviour: the shortfall is paid to the
-///     trader from the agent's locked collateral (up to the guarantee)
+///   * profit  -> the operator earns `fee_bps` of the profit, trader gets the rest
+///   * loss within max_drawdown -> tolerated trading loss, no fee, no slash
+///   * loss beyond max_drawdown -> breach: the shortfall is paid to the trader
+///     from the agent's reserved collateral (up to the guarantee)
 #[derive(Accounts)]
 pub struct SettlePosition<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
+    /// The bound trading key or the operator. Sends the returned SOL.
+    #[account(mut, constraint = agent.can_execute(&executor.key()) @ ErrorCode::UnauthorizedExecutor)]
+    pub executor: Signer<'info>,
+    /// CHECK: must be the agent's operator; receives the performance fee.
+    #[account(mut, address = agent.operator @ ErrorCode::UnauthorizedOperator)]
+    pub operator: UncheckedAccount<'info>,
     #[account(
         mut,
-        seeds = [AGENT_SEED, authority.key().as_ref()],
+        seeds = [AGENT_SEED, agent.operator.as_ref(), &agent.agent_id.to_le_bytes()],
         bump = agent.bump,
-        has_one = authority @ ErrorCode::UnauthorizedAgent,
     )]
     pub agent: Account<'info, Agent>,
     #[account(
@@ -34,7 +37,7 @@ pub struct SettlePosition<'info> {
         mut,
         seeds = [POSITION_SEED, agent.key().as_ref(), position.trader.as_ref(), &position.nonce.to_le_bytes()],
         bump = position.bump,
-        constraint = position.agent == agent.key() @ ErrorCode::UnauthorizedAgent,
+        constraint = position.agent == agent.key() @ ErrorCode::InvalidStatus,
         has_one = trader @ ErrorCode::UnauthorizedTrader,
     )]
     pub position: Account<'info, Position>,
@@ -105,7 +108,7 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
         position.principal
     } else {
         super::transfer_from_signer(
-            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.executor.to_account_info(),
             &ctx.accounts.position_vault.to_account_info(),
             &sys,
             returned,
@@ -121,10 +124,10 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
         position.locked_collateral,
     )?;
 
-    // Pay the performance fee back to the agent from the position vault.
+    // Pay the performance fee to the operator from the position vault.
     super::transfer_from_vault(
         &ctx.accounts.position_vault.to_account_info(),
-        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.operator.to_account_info(),
         &sys,
         position_seeds,
         s.fee,
@@ -168,7 +171,19 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
         .checked_add(s.fee)
         .ok_or(ErrorCode::Overflow)?;
 
+    let breach = if s.slash > 0 { Breach::Drawdown } else { Breach::None };
+    if breach != Breach::None {
+        agent.breach_count += 1;
+        emit!(BreachRecorded {
+            agent: agent.key(),
+            position: position_key,
+            breach,
+            slashed: s.slash,
+        });
+    }
+
     position.status = PositionStatus::Settled;
+    position.breach = breach;
     position.returned = effective_returned;
     position.slashed = s.slash;
     position.fee_paid = s.fee;
@@ -179,6 +194,7 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
         agent: agent.key(),
         trader: position.trader,
         status: PositionStatus::Settled,
+        breach,
         returned: effective_returned,
         slashed: s.slash,
         fee_paid: s.fee,

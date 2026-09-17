@@ -1,21 +1,27 @@
 pub mod cancel_position;
 pub mod claim_default;
+pub mod create_agent;
 pub mod deposit_collateral;
 pub mod draw_funds;
 pub mod open_position;
-pub mod register_agent;
+pub mod publish_agent;
 pub mod set_accepting;
+pub mod set_executor;
 pub mod settle_position;
+pub mod update_agent;
 pub mod withdraw_collateral;
 
 pub use cancel_position::*;
 pub use claim_default::*;
+pub use create_agent::*;
 pub use deposit_collateral::*;
 pub use draw_funds::*;
 pub use open_position::*;
-pub use register_agent::*;
+pub use publish_agent::*;
 pub use set_accepting::*;
+pub use set_executor::*;
 pub use settle_position::*;
+pub use update_agent::*;
 pub use withdraw_collateral::*;
 
 use anchor_lang::prelude::*;

@@ -5,12 +5,12 @@ use crate::{constants::*, error::ErrorCode, events::CollateralChanged, state::Ag
 #[derive(Accounts)]
 pub struct WithdrawCollateral<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub operator: Signer<'info>,
     #[account(
         mut,
-        seeds = [AGENT_SEED, authority.key().as_ref()],
+        seeds = [AGENT_SEED, agent.operator.as_ref(), &agent.agent_id.to_le_bytes()],
         bump = agent.bump,
-        has_one = authority @ ErrorCode::UnauthorizedAgent,
+        has_one = operator @ ErrorCode::UnauthorizedOperator,
     )]
     pub agent: Account<'info, Agent>,
     #[account(
@@ -36,7 +36,7 @@ pub fn handle_withdraw_collateral(ctx: Context<WithdrawCollateral>, amount: u64)
     let seeds: &[&[u8]] = &[AGENT_VAULT_SEED, agent_key.as_ref(), &[agent.vault_bump]];
     super::transfer_from_vault(
         &ctx.accounts.agent_vault.to_account_info(),
-        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.operator.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
         seeds,
         amount,

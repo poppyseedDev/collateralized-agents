@@ -4,7 +4,7 @@ use crate::{
     constants::*,
     error::ErrorCode,
     events::PositionOpened,
-    state::{Agent, Position, PositionStatus},
+    state::{Agent, AgentStatus, Breach, Position, PositionStatus},
 };
 
 #[derive(Accounts)]
@@ -14,7 +14,7 @@ pub struct OpenPosition<'info> {
     pub trader: Signer<'info>,
     #[account(
         mut,
-        seeds = [AGENT_SEED, agent.authority.as_ref()],
+        seeds = [AGENT_SEED, agent.operator.as_ref(), &agent.agent_id.to_le_bytes()],
         bump = agent.bump,
     )]
     pub agent: Account<'info, Agent>,
@@ -53,16 +53,17 @@ pub fn handle_open_position(
     duration_secs: i64,
 ) -> Result<()> {
     require!(amount > 0, ErrorCode::ZeroAmount);
+    let agent = &mut ctx.accounts.agent;
+    require!(agent.status == AgentStatus::Active, ErrorCode::AgentNotAccepting);
+    // The trader picks a deadline inside the window the operator published.
     require!(
-        (MIN_POSITION_DURATION..=MAX_POSITION_DURATION).contains(&duration_secs),
+        (agent.terms.min_duration_secs..=agent.terms.max_duration_secs).contains(&duration_secs),
         ErrorCode::InvalidDuration
     );
-    let agent = &mut ctx.accounts.agent;
-    require!(agent.accepting, ErrorCode::AgentPaused);
 
     // Lock the agent's guarantee for this position. If the agent cannot
     // back the deposit at its advertised ratio, the position cannot open.
-    let locked = required_collateral(amount, agent.collateral_ratio_bps)?;
+    let locked = required_collateral(amount, agent.terms.collateral_ratio_bps)?;
     require!(
         locked <= agent.free_collateral(),
         ErrorCode::InsufficientFreeCollateral
@@ -93,9 +94,10 @@ pub fn handle_open_position(
     position.nonce = nonce;
     position.principal = amount;
     position.locked_collateral = locked;
-    position.fee_bps = agent.fee_bps;
-    position.max_drawdown_bps = agent.max_drawdown_bps;
+    position.fee_bps = agent.terms.fee_bps;
+    position.max_drawdown_bps = agent.terms.max_drawdown_bps;
     position.status = PositionStatus::Open;
+    position.breach = Breach::None;
     position.opened_at = now;
     position.deadline = now + duration_secs;
     position.drawn_at = 0;

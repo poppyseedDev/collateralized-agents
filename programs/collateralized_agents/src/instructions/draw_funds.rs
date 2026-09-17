@@ -6,25 +6,25 @@ use crate::{
     state::{Agent, Position, PositionStatus},
 };
 
-/// The agent pulls the trader's principal out of the position vault to trade
-/// with it. From this moment the agent's locked collateral is at risk: it
-/// must settle before the deadline or the trader claims the guarantee.
+/// The agent's trading key pulls the trader's principal out of the position
+/// vault to trade with it. From this moment the reserved collateral is at
+/// risk: the agent must settle before the deadline or the trader claims it.
 #[derive(Accounts)]
 pub struct DrawFunds<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
+    /// The bound trading key or the operator. Receives the principal.
+    #[account(mut, constraint = agent.can_execute(&executor.key()) @ ErrorCode::UnauthorizedExecutor)]
+    pub executor: Signer<'info>,
     #[account(
         mut,
-        seeds = [AGENT_SEED, authority.key().as_ref()],
+        seeds = [AGENT_SEED, agent.operator.as_ref(), &agent.agent_id.to_le_bytes()],
         bump = agent.bump,
-        has_one = authority @ ErrorCode::UnauthorizedAgent,
     )]
     pub agent: Account<'info, Agent>,
     #[account(
         mut,
         seeds = [POSITION_SEED, agent.key().as_ref(), position.trader.as_ref(), &position.nonce.to_le_bytes()],
         bump = position.bump,
-        constraint = position.agent == agent.key() @ ErrorCode::UnauthorizedAgent,
+        constraint = position.agent == agent.key() @ ErrorCode::InvalidStatus,
     )]
     pub position: Account<'info, Position>,
     #[account(
@@ -49,7 +49,7 @@ pub fn handle_draw_funds(ctx: Context<DrawFunds>) -> Result<()> {
     let seeds: &[&[u8]] = &[POSITION_VAULT_SEED, position_key.as_ref(), &[position.vault_bump]];
     super::transfer_from_vault(
         &ctx.accounts.position_vault.to_account_info(),
-        &ctx.accounts.authority.to_account_info(),
+        &ctx.accounts.executor.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
         seeds,
         position.principal,
