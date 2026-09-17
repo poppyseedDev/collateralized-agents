@@ -24,20 +24,52 @@ export default function Positions() {
   if (!publicKey) return <div className="empty">Connect your wallet to see your positions.</div>;
 
   const live = positions.filter((p) => p.status === "open" || p.status === "trading");
-  const allocated = live.reduce((n, p) => n + p.principal.toNumber(), 0);
-  const guaranteed = live.reduce((n, p) => n + p.lockedCollateral.toNumber(), 0);
-  const received = positions.reduce(
-    (n, p) => n + (p.status === "settled" || p.status === "defaulted" ? p.slashed.toNumber() : 0),
-    0,
-  );
+  const closed = positions.filter((p) => p.status === "settled" || p.status === "defaulted");
+  const sum = (list: PositionAccount[], f: (p: PositionAccount) => number) => list.reduce((n, p) => n + f(p), 0);
+  const atWork = sum(live, (p) => p.principal.toNumber());
+  const guaranteed = sum(live, (p) => p.lockedCollateral.toNumber());
+  const closedPrincipal = sum(closed, (p) => p.principal.toNumber());
+  const paidOut = sum(closed, (p) => p.returned.toNumber() - p.feePaid.toNumber() + p.slashed.toNumber());
+  const collateralReceived = sum(closed, (p) => p.slashed.toNumber());
+  const feesPaid = sum(closed, (p) => p.feePaid.toNumber());
+  const profit = paidOut - closedPrincipal;
+  const profitPct = closedPrincipal > 0 ? (profit / closedPrincipal) * 100 : null;
+  const signed = (lamports: number) => `${lamports >= 0 ? "+" : "−"}${sol(Math.abs(lamports), 3)}`;
 
   return (
     <>
       <div className="stats rise">
-        <div className="stat"><span className="k">Active positions</span><span className="v">{live.length}</span></div>
-        <div className="stat"><span className="k">Allocated</span><span className="v">{sol(allocated)}<small>SOL</small></span></div>
-        <div className="stat"><span className="k">Guaranteed to you</span><span className="v cy">{sol(guaranteed)}<small>SOL</small></span></div>
-        <div className="stat"><span className="k">Collateral received</span><span className="v pos">{sol(received)}<small>SOL</small></span></div>
+        <div className="stat">
+          <span className="k">Net profit</span>
+          <span className={"v " + (closed.length === 0 ? "" : profit >= 0 ? "pos" : "neg")}>
+            {closed.length === 0 ? "—" : signed(profit)}
+            {closed.length > 0 && <small>SOL</small>}
+          </span>
+          <span className="sub">
+            {profitPct === null
+              ? "Appears once a position closes"
+              : `${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(1)}% on ${sol(closedPrincipal)} SOL closed`}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="k">Paid out to you</span>
+          <span className="v">{sol(paidOut, 3)}<small>SOL</small></span>
+          <span className="sub">
+            {closed.length} closed · {sol(feesPaid, 3)} SOL in agent fees
+          </span>
+        </div>
+        <div className="stat">
+          <span className="k">Capital at work</span>
+          <span className="v">{sol(atWork)}<small>SOL</small></span>
+          <span className="sub">
+            {live.length} active · <span className="cy">{sol(guaranteed)} SOL guaranteed</span>
+          </span>
+        </div>
+        <div className="stat">
+          <span className="k">Collateral received</span>
+          <span className={"v " + (collateralReceived > 0 ? "cy" : "")}>{sol(collateralReceived, 3)}<small>SOL</small></span>
+          <span className="sub">Paid from agents' bonds when they fell short</span>
+        </div>
       </div>
       <div className="panel rise d1">
       <div className="sec-head">
@@ -59,7 +91,6 @@ export default function Positions() {
               <th>Status</th>
               <th className="num">Principal</th>
               <th className="num">Guaranteed</th>
-              <th className="num hide-sm">Deadline</th>
               <th className="num hide-sm">Outcome</th>
               <th></th>
             </tr>
@@ -76,7 +107,17 @@ export default function Positions() {
                       <Avatar seed={p.agent.toBase58()} name={agentName(p.agent)} />
                       <div>
                         <div className="agent-name">{agentName(p.agent)}</div>
-                        <div className="tiny">Opened {fmtTime(p.openedAt.toNumber())}</div>
+                        <div className="tiny">
+                          {p.status === "open" || p.status === "trading" ? (
+                            <span className={expired && p.status === "trading" ? "neg" : undefined}>
+                              {expired && p.status === "trading" ? "Overdue since" : "Due"} {fmtTime(deadline)}
+                            </span>
+                          ) : p.closedAt.toNumber() > 0 ? (
+                            <>Closed {fmtTime(p.closedAt.toNumber())}</>
+                          ) : (
+                            <>Opened {fmtTime(p.openedAt.toNumber())}</>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </td>
@@ -87,9 +128,6 @@ export default function Positions() {
                   <td className="num cy">
                     {sol(p.lockedCollateral, 3)} SOL
                     <div className="tiny">fee {pct(p.feeBps)} · tolerance {pct(p.maxDrawdownBps)}</div>
-                  </td>
-                  <td className="num hide-sm" style={{ color: expired && p.status === "trading" ? "var(--red)" : undefined }}>
-                    {fmtTime(deadline)}
                   </td>
                   <td className="num hide-sm">
                     {p.status === "settled" || p.status === "defaulted" ? (
