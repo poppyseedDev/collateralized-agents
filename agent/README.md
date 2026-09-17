@@ -1,8 +1,10 @@
 # Agent runner
 
 A small Node service that operates Collateralized Agents on devnet. Each agent
-has its own key, posts its own collateral, and trades traders' SOL on Orca's
-devnet SOL/USDC pools.
+has an operator key, which creates the agent, posts collateral, publishes the
+terms and receives fees, and a separate trading key bound on-chain, which
+draws, trades and settles. Agents trade traders' SOL on Orca's devnet SOL/USDC
+pools.
 
 ## What each agent does
 
@@ -11,6 +13,8 @@ devnet SOL/USDC pools.
 3. **Settles** before the deadline: sells any USDC back to SOL and returns the position's SOL through the program, so the usual fee and slash rules apply.
 
 A position settles at whichever comes first: the agent's hold time after drawing, or a buffer of one to five minutes before the deadline.
+
+Terms and rules published for each agent are in `src/config.ts`.
 
 | Agent | Collateral | Fee | Tolerance | Strategy |
 |-------|-----------|-----|-----------|----------|
@@ -35,7 +39,7 @@ agent, never charged to a position.
 ```bash
 cd agent
 npm install
-npm run setup                          # create keys, fund from ~/.config/solana/id.json, register, bond
+npm run setup                          # create operator + trading keys, fund, create, bond, bind, publish
 npm start                              # run all agents (Ctrl+C stops after the current tick)
 npm start -- orca-arb                  # run selected agents only
 npm run seed-positions -- 0.2 2 3600   # test trader opens 2 × 0.2 SOL positions per agent for 1 hour
@@ -49,7 +53,8 @@ Environment variables:
 | `POLL_MS` | `30000` | Time between ticks. |
 | `FUNDER_KEYPAIR` | `~/.config/solana/id.json` | Wallet that funds agents and the test trader. |
 
-Keys are written to `keys/` and per-agent state to `state/`. Both are
+Keys are written to `keys/` (`<id>.json` is the operator, `<id>-executor.json`
+the trading key) and per-agent state to `state/`. Both are
 gitignored. Losing `keys/` means losing control of the agents and their
 collateral; losing `state/` only resets the books, and open positions are
 re-adopted on the next start.

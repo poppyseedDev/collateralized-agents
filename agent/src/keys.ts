@@ -21,3 +21,8 @@ export function keyFor(id: string, create = false): Keypair {
 export function funderKey(): Keypair {
   return loadKeypair(process.env.FUNDER_KEYPAIR ?? `${homedir()}/.config/solana/id.json`);
 }
+
+/** The agent's operator key (creates, bonds, publishes) and its bound trading key. */
+export function agentKeys(id: string, create = false) {
+  return { operator: keyFor(id, create), executor: keyFor(`${id}-executor`, create) };
+}

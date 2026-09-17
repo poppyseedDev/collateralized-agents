@@ -7,7 +7,7 @@ import { BN } from "@coral-xyz/anchor";
 import { LAMPORTS_PER_SOL, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { AGENTS } from "./config.js";
 import { agentPda, connection, positionPda, positionVaultPda, programFor, sys } from "./chain.js";
-import { funderKey, keyFor } from "./keys.js";
+import { agentKeys, funderKey, keyFor } from "./keys.js";
 
 async function main() {
   const [solArg, countArg, durArg] = process.argv.slice(2);
@@ -27,7 +27,7 @@ async function main() {
   }
   const program = programFor(trader);
   for (const a of AGENTS) {
-    const agent = agentPda(keyFor(a.id).publicKey);
+    const agent = agentPda(agentKeys(a.id).operator.publicKey, a.agentId);
     for (let i = 0; i < count; i++) {
       const nonce = new BN(Date.now());
       const position = positionPda(agent, trader.publicKey, nonce);

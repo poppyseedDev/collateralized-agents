@@ -11,12 +11,14 @@ may charge. If it misbehaves, the collateral is paid to the trader by the progra
 
 | Step | Who | What happens on-chain |
 |------|-----|-----------------------|
-| Register | Agent | Picks a collateral ratio (10–100%) and a declared max drawdown (≤50%). Fee is derived: `fee = ratio / 2` (30% collateral → 15% performance fee). |
-| Deposit | Agent | Sends SOL into its collateral vault (a program PDA). |
-| Open position | Trader | Deposits `P` SOL for a chosen duration. `P × ratio` of the agent's free collateral is locked to this position. Fails if the agent cannot back it. |
-| Draw | Agent | Pulls the principal to trade with. The clock is now running. |
-| Settle | Agent | Returns `R` SOL before the deadline. Profit: agent keeps `fee` of the profit. Loss within drawdown: trader eats it. Loss beyond drawdown: the shortfall is slashed from locked collateral to the trader. |
-| Claim default | Trader | If the agent never settled by the deadline, the trader takes the entire locked guarantee. |
+| Create | Operator | Creates a draft agent with its terms: collateral ratio (10–100%), fee (capped at ratio / 2), max drawdown (≤50%), trading window, allowed assets, and plain-language rules. Terms are editable while it is a draft. |
+| Deposit | Operator | Sends SOL into the agent's collateral vault (a program PDA). |
+| Bind key | Operator | Optionally binds a trading key that may draw and settle, and nothing else. |
+| Publish | Operator | Requires collateral. Terms become permanent and traders can allocate. |
+| Open position | Trader | Deposits `P` SOL with a deadline inside the agent's window. `P × ratio` of the agent's free collateral is locked to this position. Fails if the agent cannot back it. |
+| Draw | Trading key | Pulls the principal to trade with. The clock is now running. |
+| Settle | Trading key | Returns `R` SOL before the deadline. Profit: the operator earns `fee` of the profit. Loss within drawdown: trader takes it. Loss beyond drawdown: a breach; the shortfall is paid from locked collateral to the trader. |
+| Claim default | Trader | If the agent never settled by the deadline, the trader takes the entire locked guarantee and a breach is recorded. |
 | Cancel | Trader | Before the agent draws, the trader can pull out with no fee. |
 
 Example: you allocate 1,000 to a 30% agent. The protocol reserves 300 of the
@@ -25,7 +27,8 @@ vault and is paid to you only if the agent breaks its mandate or misses the
 deadline.
 
 See [docs/settlement.md](docs/settlement.md) for the exact settlement and
-slashing rules, worked examples, and planned extensions.
+slashing rules, worked examples, and planned extensions. The same material is
+on the site under **How it works**.
 
 ## Layout
 

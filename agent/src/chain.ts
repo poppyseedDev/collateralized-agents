@@ -10,8 +10,11 @@ export const PROGRAM_ID = new PublicKey(IDL.address);
 export const connection = new Connection(RPC_URL, "confirmed");
 
 const seed = (s: string) => Buffer.from(s);
-export const agentPda = (authority: PublicKey) =>
-  PublicKey.findProgramAddressSync([seed("agent"), authority.toBuffer()], PROGRAM_ID)[0];
+export const agentPda = (operator: PublicKey, agentId: number) =>
+  PublicKey.findProgramAddressSync(
+    [seed("agent"), operator.toBuffer(), new BN(agentId).toArrayLike(Buffer, "le", 8)],
+    PROGRAM_ID,
+  )[0];
 export const agentVaultPda = (agent: PublicKey) =>
   PublicKey.findProgramAddressSync([seed("agent_vault"), agent.toBuffer()], PROGRAM_ID)[0];
 export const positionPda = (agent: PublicKey, trader: PublicKey, nonce: BN) =>

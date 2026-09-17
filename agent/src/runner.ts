@@ -14,23 +14,27 @@ import {
   type Prog,
 } from "./chain.js";
 import { bestQuote, initOrca, mainPrice, signerFor, swapExactIn } from "./orca.js";
-import { keyFor } from "./keys.js";
+import { agentKeys } from "./keys.js";
 import { loadState, saveState, type AgentState, type Book } from "./state.js";
 
 const now = () => Math.floor(Date.now() / 1000);
 const fmt = (lamports: bigint | string) => (Number(lamports) / LAMPORTS_PER_SOL).toFixed(4);
 
 class AgentRunner {
+  /** The bound trading key: draws, swaps, and settles. */
   kp: Keypair;
+  operator: PublicKey;
   program: Prog;
   agent: PublicKey;
   signer!: KeyPairSigner;
   state: AgentState;
 
   constructor(readonly cfg: AgentConfig) {
-    this.kp = keyFor(cfg.id);
+    const keys = agentKeys(cfg.id);
+    this.kp = keys.executor;
+    this.operator = keys.operator.publicKey;
     this.program = programFor(this.kp);
-    this.agent = agentPda(this.kp.publicKey);
+    this.agent = agentPda(this.operator, cfg.agentId);
     this.state = loadState(cfg.id);
   }
 
@@ -46,7 +50,10 @@ class AgentRunner {
     this.signer = await signerFor(this.kp);
     const acc = await this.program.account.agent.fetchNullable(this.agent);
     if (!acc) throw new Error(`${this.cfg.id} is not registered; run npm run setup`);
-    this.log("agent", this.agent.toBase58(), "authority", this.kp.publicKey.toBase58());
+    if (!acc.executor.equals(this.kp.publicKey)) {
+      throw new Error(`${this.cfg.id}: trading key is not bound; run npm run setup`);
+    }
+    this.log("agent", this.agent.toBase58(), "status", Object.keys(acc.status)[0], "trading key", this.kp.publicKey.toBase58());
   }
 
   async tick(price: number | null, positions: Position[]) {
@@ -88,7 +95,7 @@ class AgentRunner {
     const sig = await this.program.methods
       .drawFunds()
       .accounts({
-        authority: this.kp.publicKey,
+        executor: this.kp.publicKey,
         agent: this.agent,
         position: p.publicKey,
         positionVault: positionVaultPda(p.publicKey),
@@ -222,7 +229,8 @@ class AgentRunner {
     const sig = await this.program.methods
       .settlePosition(new BN(returned.toString()))
       .accounts({
-        authority: this.kp.publicKey,
+        executor: this.kp.publicKey,
+        operator: this.operator,
         agent: this.agent,
         agentVault: agentVaultPda(this.agent),
         position: p.publicKey,

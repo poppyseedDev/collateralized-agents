@@ -9,15 +9,35 @@ as such.
 
 | Term | Meaning | On-chain field |
 |------|---------|----------------|
+| Operator | Wallet that creates and manages the agent, publishes its terms, and owns its collateral. | `Agent.operator` |
+| Trading key | Wallet the operator binds to draw and settle positions. Defaults to the operator. | `Agent.executor` |
 | Principal | SOL the trader deposited into the position. | `Position.principal` |
-| Collateral ratio | Share of the principal the agent must lock as a guarantee. | `Agent.collateral_ratio_bps` |
+| Collateral ratio | Share of the principal the agent must lock as a guarantee. 10% to 100%. | `Agent.terms.collateral_ratio_bps` |
 | Locked bond | `principal × collateral ratio`, rounded up. Reserved from the agent's collateral vault for this position only. | `Position.locked_collateral` |
-| Tolerance | How much worse than holding SOL the agent may do before its bond pays the trader. Called *max drawdown* in the code. Up to 50%. | `Agent.max_drawdown_bps` |
+| Tolerance | How much worse than holding SOL the agent may do before its bond pays the trader. Called *max drawdown* in the code. Up to 50%. | `Agent.terms.max_drawdown_bps` |
 | Returned | SOL the agent sends back when it settles. | `Position.returned` |
-| Performance fee | Share of profit the agent keeps. Always half the collateral ratio. | `Agent.fee_bps` |
+| Performance fee | Share of profit paid to the operator. Chosen by the operator, capped at half the collateral ratio. | `Agent.terms.fee_bps` |
+| Trading window | Shortest and longest deadline a trader may choose. | `Agent.terms.min_duration_secs`, `max_duration_secs` |
+| Breach | A settlement below the floor, or a missed deadline. | `Position.breach`, `Agent.breach_count` |
 
-The position snapshots the fee and tolerance when it opens, so an agent cannot
-change the terms of a position that already exists.
+The position snapshots the fee and tolerance when it opens. Published terms
+cannot change in any case.
+
+## Publishing an agent (live)
+
+An agent is created as a **draft**. While it is a draft, the operator can edit
+its name, description and every term: collateral ratio, fee, maximum drawdown,
+trading window, allowed assets (up to eight mints) and plain-language rules
+(up to 512 characters, stored on-chain). Traders cannot allocate to a draft.
+
+`publish_agent` requires a collateral deposit, validates the terms again, and
+moves the agent to **active**. From then on the terms are permanent. The
+operator can pause and resume new positions, deposit and withdraw free
+collateral, and bind a different trading key. To change terms, the operator
+creates a new agent; one operator can run many, each with its own `agent_id`.
+
+Allowed assets and rules are disclosure: the program stores and shows them,
+but does not check which trades an agent makes.
 
 ## The rule (live)
 
@@ -27,9 +47,9 @@ slash = min(locked_bond, max(0, floor − returned))
 fee   = profit × fee_bps          only when returned > principal
 ```
 
-- **Profit.** The agent keeps its fee on the profit. The trader receives the rest. The bond is untouched.
+- **Profit.** The operator receives its fee on the profit. The trader receives the rest. The bond is untouched.
 - **Loss within tolerance.** The trader absorbs the loss. The agent earns no fee. The bond is untouched.
-- **Loss beyond tolerance.** The part below the floor is paid from the agent's locked bond to the trader, up to the full locked amount.
+- **Loss beyond tolerance.** A breach. The part below the floor is paid from the agent's locked bond to the trader, up to the full locked amount.
 - **Loss beyond the bond.** Anything below `floor − locked_bond` is the trader's loss. A higher collateral ratio shrinks this gap, which is why it earns a higher fee.
 
 In every case the locked bond is released back to the agent's free collateral, minus any slash.
@@ -65,11 +85,12 @@ The trader also gets back the position vault's rent deposit (about
 
 | From | Action | Who | Condition | Result |
 |------|--------|-----|-----------|--------|
-| Open | `draw_funds` | Agent | Before the deadline | Principal moves to the agent. Status becomes Trading. |
+| — | `open_position` | Trader | Agent is active, deadline inside the published window, enough free collateral | Principal moves into the position vault. Bond is reserved. |
+| Open | `draw_funds` | Trading key or operator | Before the deadline | Principal moves to the trading key. Status becomes Trading. |
 | Open | `cancel_position` | Trader | Any time | Full refund. Bond released. No fee. |
-| Open | `settle_position` | Agent | Any time | Treated as returning the full principal, so no fee and no slash. Used to decline a position. |
-| Trading | `settle_position` | Agent | No deadline check | The rule above applies to the SOL the agent sends. |
-| Trading | `claim_default` | Trader | At or after the deadline | The whole locked bond goes to the trader. Status becomes Defaulted. |
+| Open | `settle_position` | Trading key or operator | Any time | Treated as returning the full principal, so no fee and no slash. Used to decline a position. |
+| Trading | `settle_position` | Trading key or operator | No deadline check | The rule above applies to the SOL sent. A slash records a drawdown breach. |
+| Trading | `claim_default` | Trader | At or after the deadline | The whole locked bond goes to the trader. Status becomes Defaulted and a missed-deadline breach is recorded. |
 
 ### Missed deadline
 
