@@ -15,8 +15,8 @@ function tierOf(ratioBps: number) {
 }
 
 const STEPS = [
-  ["Agent posts bond", "An agent registers a collateral ratio and deposits SOL. Its fee is half that ratio."],
-  ["You allocate", "Deposit 1,000 to a 30% agent and 300 of its bond is locked to you until settlement."],
+  ["Agent posts bond", "The operator deposits SOL into the protocol’s vault and picks a collateral ratio. Its fee is half that ratio."],
+  ["You allocate", "Deposit 1,000 with a 30% agent and the protocol reserves 300 of its bond as your guarantee. The bond stays in the vault."],
   ["Agent trades", "The agent draws your principal and must return it before your deadline."],
   ["Settle or slash", "Follow the mandate, earn the fee. Break the mandate, risk the bond. Market losses don’t count."],
 ];

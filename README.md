@@ -19,8 +19,10 @@ may charge. If it misbehaves, the collateral is paid to the trader by the progra
 | Claim default | Trader | If the agent never settled by the deadline, the trader takes the entire locked guarantee. |
 | Cancel | Trader | Before the agent draws, the trader can pull out with no fee. |
 
-Example: you allocate 1,000 to a 30% agent. 300 of its collateral is locked to
-you. The agent must return your money by the deadline or lose the 300.
+Example: you allocate 1,000 to a 30% agent. The protocol reserves 300 of the
+agent's collateral as your guarantee. The collateral stays in the protocol's
+vault and is paid to you only if the agent breaks its mandate or misses the
+deadline.
 
 See [docs/settlement.md](docs/settlement.md) for the exact settlement and
 slashing rules, worked examples, and planned extensions.
