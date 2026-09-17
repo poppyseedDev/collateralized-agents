@@ -17,9 +17,18 @@ import {
   walletProgram,
 } from "./program";
 
+/** Realised results for traders on one agent, from its closed positions. */
+export type AgentStats = {
+  closed: number;
+  principal: number;
+  /** What traders got back minus what they put in, in lamports, after fees and slashing. */
+  traderPnl: number;
+};
+
 export function useAgents() {
   const { connection } = useConnection();
   const [agents, setAgents] = useState<AgentAccount[]>([]);
+  const [stats, setStats] = useState<Record<string, AgentStats>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,10 +36,25 @@ export function useAgents() {
     setLoading(true);
     try {
       const program = readonlyProgram(connection);
-      const raw = await program.account.agent.all();
+      const [raw, rawPositions] = await Promise.all([
+        program.account.agent.all(),
+        program.account.position.all(),
+      ]);
       const list = raw.map(decodeAgent) as AgentAccount[];
       list.sort((a, b) => b.totalCollateral.cmp(a.totalCollateral));
+      const next: Record<string, AgentStats> = {};
+      for (const p of rawPositions.map(decodePosition) as PositionAccount[]) {
+        if (p.status !== "settled" && p.status !== "defaulted") continue;
+        const k = p.agent.toBase58();
+        const s = (next[k] ??= { closed: 0, principal: 0, traderPnl: 0 });
+        const principal = p.principal.toNumber();
+        const payout = p.returned.toNumber() - p.feePaid.toNumber() + p.slashed.toNumber();
+        s.closed += 1;
+        s.principal += principal;
+        s.traderPnl += payout - principal;
+      }
       setAgents(list);
+      setStats(next);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -42,7 +66,7 @@ export function useAgents() {
   useEffect(() => {
     refresh();
   }, [refresh]);
-  return { agents, loading, error, refresh };
+  return { agents, stats, loading, error, refresh };
 }
 
 /** Positions filtered by a memcmp on either the trader (offset 8) or agent (offset 40). */

@@ -22,7 +22,7 @@ const STEPS = [
 ];
 
 export default function Marketplace() {
-  const { agents, loading, error, refresh } = useAgents();
+  const { agents, stats, loading, error, refresh } = useAgents();
   const actions = useActions();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const widgetRef = useRef<HTMLDivElement>(null);
@@ -100,7 +100,7 @@ export default function Marketplace() {
                     <th className="num">Collateral</th>
                     <th className="num">Fee</th>
                     <th className="num hide-sm">Available bond</th>
-                    <th className="num hide-sm hide-md">Track record</th>
+                    <th className="num hide-sm hide-md">Trader return</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -109,7 +109,9 @@ export default function Marketplace() {
                     const free = freeCollateral(a).toNumber();
                     const total = a.totalCollateral.toNumber();
                     const used = total ? 1 - free / total : 0;
-                    const closed = a.settledPositions + a.defaultedPositions;
+                    const st = stats[a.publicKey.toBase58()];
+                    const ret = st && st.principal > 0 ? (st.traderPnl / st.principal) * 100 : null;
+                    const retText = ret === null ? null : `${ret >= 0 ? "+" : ""}${ret.toFixed(1)}%`;
                     const isSel = selected?.publicKey.equals(a.publicKey);
                     return (
                       <tr
@@ -132,6 +134,7 @@ export default function Marketplace() {
                               </div>
                               <div className="agent-strategy">{a.strategy || short(a.authority)}</div>
                               <div className="tiny show-md">
+                                {retText && <span className={ret! >= 0 ? "pos" : "neg"}>{retText} to traders · </span>}
                                 {a.settledPositions} settled · {a.openPositions} open
                                 {a.defaultedPositions > 0 && <span className="neg"> · {a.defaultedPositions} defaulted</span>}
                               </div>
@@ -156,13 +159,15 @@ export default function Marketplace() {
                           <div className="tiny">Capacity {sol(capacity(a))} SOL</div>
                         </td>
                         <td className="num hide-sm hide-md">
-                          <div>
+                          {retText ? (
+                            <div className={"big " + (ret! >= 0 ? "pos" : "neg")}>{retText}</div>
+                          ) : (
+                            <div className="tiny">No history yet</div>
+                          )}
+                          <div className="tiny">
                             {a.settledPositions} settled · {a.openPositions} open
-                          </div>
-                          <div className={"tiny " + (a.defaultedPositions ? "neg" : "")}>
-                            {closed > 0
-                              ? `${Math.round((a.settledPositions / closed) * 100)}% honoured · ${sol(a.slashedTotal)} slashed`
-                              : "No history yet"}
+                            {a.defaultedPositions > 0 && <span className="neg"> · {a.defaultedPositions} defaulted</span>}
+                            {a.slashedTotal.gtn(0) && <span className="neg"> · {sol(a.slashedTotal)} slashed</span>}
                           </div>
                         </td>
                       </tr>
