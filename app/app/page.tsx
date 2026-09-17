@@ -1,8 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { useAgents, useActions } from "@/lib/useProtocol";
-import { capacity, freeCollateral, pct, short, sol } from "@/lib/program";
+import { assetLabel, capacity, fmtDuration, freeCollateral, pct, short, sol } from "@/lib/program";
 import { Certificate } from "@/components/Certificate";
 import { TxNotice } from "@/components/TxNotice";
 import { Avatar } from "@/components/Avatar";
@@ -15,7 +16,7 @@ function tierOf(ratioBps: number) {
 }
 
 const STEPS = [
-  ["Agent posts bond", "The operator deposits SOL into the protocol’s vault and picks a collateral ratio. Its fee is half that ratio."],
+  ["Operator publishes terms", "Before launch, the operator publishes the rules, fee, trading window, drawdown limit and assets, and deposits collateral into the protocol’s vault."],
   ["You allocate", "Deposit 1,000 with a 30% agent and the protocol reserves 300 of its bond as your guarantee. The bond stays in the vault."],
   ["Agent trades", "The agent draws your principal and must return it before your deadline."],
   ["Settle or slash", "Follow the mandate, earn the fee. Break the mandate, risk the bond. Market losses don’t count."],
@@ -45,6 +46,7 @@ export default function Marketplace() {
             Every agent locks its own SOL against the capital you allocate. More collateral earns a higher fee. If
             the agent misbehaves, the program pays the collateral to you.
           </p>
+          <Link href="/how-it-works" className="hero-link">How it works →</Link>
         </div>
         <div className="stats">
           <div className="stat">
@@ -104,7 +106,7 @@ export default function Marketplace() {
                 </thead>
                 <tbody>
                   {agents.map((a) => {
-                    const tier = tierOf(a.collateralRatioBps);
+                    const tier = tierOf(a.terms.collateralRatioBps);
                     const free = freeCollateral(a).toNumber();
                     const total = a.totalCollateral.toNumber();
                     const used = total ? 1 - free / total : 0;
@@ -129,9 +131,13 @@ export default function Marketplace() {
                             <div>
                               <div className="agent-name">
                                 {a.name}
-                                {!a.accepting && <span className="pill paused">Paused</span>}
+                                {a.status === "paused" && <span className="pill paused">Paused</span>}
                               </div>
-                              <div className="agent-strategy">{a.strategy || short(a.authority)}</div>
+                              <div className="agent-strategy">{a.description || short(a.operator)}</div>
+                              <div className="tiny">
+                                {a.terms.allowedAssets.map((m) => assetLabel(m)).join(" · ")} ·{" "}
+                                {fmtDuration(a.terms.minDurationSecs.toNumber())}–{fmtDuration(a.terms.maxDurationSecs.toNumber())}
+                              </div>
                               <div className="tiny">
                                 {retText ? (
                                   <span className={"ret " + (ret! >= 0 ? "pos" : "neg")}>{retText} to traders</span>
@@ -140,18 +146,21 @@ export default function Marketplace() {
                                 )}
                                 {" · "}
                                 {a.settledPositions} settled · {a.openPositions} open
-                                {a.defaultedPositions > 0 && <span className="neg"> · {a.defaultedPositions} defaulted</span>}
-                                {a.slashedTotal.gtn(0) && <span className="neg"> · {sol(a.slashedTotal)} slashed</span>}
+                                {a.breachCount > 0 && (
+                                  <span className="neg">
+                                    {" "}· {a.breachCount} breach{a.breachCount === 1 ? "" : "es"}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
                         </td>
                         <td className="num">
-                          <div className="big">{pct(a.collateralRatioBps)}</div>
+                          <div className="big">{pct(a.terms.collateralRatioBps)}</div>
                           <span className={"tier " + tier.cls}>{tier.label}</span>
                         </td>
                         <td className="num">
-                          <div className="big pos">{pct(a.feeBps)}</div>
+                          <div className="big pos">{pct(a.terms.feeBps)}</div>
                           <div className="tiny">of profit</div>
                         </td>
                         <td className="num hide-sm">

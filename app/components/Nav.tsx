@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import { CLUSTER } from "@/lib/program";
 import { LocalFaucet } from "./LocalFaucet";
-import { IconAgents, IconConsole, IconPositions, Logo } from "./Icons";
+import { IconAgents, IconBook, IconConsole, IconPositions, Logo } from "./Icons";
 
 const LABELS = {
   "change-wallet": "Change wallet",
@@ -35,8 +35,12 @@ const sections = [
     ],
   },
   {
-    title: "Build",
-    links: [{ href: "/agent", label: "Agent console", short: "Console", Icon: IconConsole }],
+    title: "Operate",
+    links: [{ href: "/agent", label: "Operator console", short: "Operator", Icon: IconConsole }],
+  },
+  {
+    title: "Learn",
+    links: [{ href: "/how-it-works", label: "How it works", short: "Learn", Icon: IconBook }],
   },
 ];
 const allLinks = sections.flatMap((s) => s.links);

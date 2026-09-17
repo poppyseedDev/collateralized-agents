@@ -48,25 +48,45 @@ async function expectAnchorError(p: Promise<unknown>, code: string) {
 const balance = (k: PublicKey) => connection.getBalance(k, "confirmed");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** A fresh agent + trader pair with their own funded keypairs and PDAs. */
-async function setup(ratioBps = 3000, drawdownBps = 2000, bondSol = 1) {
+const SOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
+const USDC_MINT = new PublicKey("BRjpCHtyQLNCo8gqRUr8jtdAj5AjPYQaoqbvcZiHok1k");
+
+function termsArg(ratioBps: number, feeBps: number, drawdownBps: number) {
+  return {
+    collateralRatioBps: ratioBps,
+    feeBps,
+    maxDrawdownBps: drawdownBps,
+    minDurationSecs: new BN(60),
+    maxDurationSecs: new BN(7 * 24 * 3600),
+    allowedAssets: [SOL_MINT, USDC_MINT],
+    rules: "Trade SOL/USDC only.",
+  };
+}
+
+/**
+ * A fresh operator + trader pair. By default the agent is created, bonded and
+ * published with a 30% ratio, 15% fee and 20% tolerance.
+ */
+async function setup(ratioBps = 3000, drawdownBps = 2000, bondSol = 1, publish = true) {
   const agentKp = Keypair.generate();
   const traderKp = Keypair.generate();
   await Promise.all([fund(agentKp), fund(traderKp)]);
-  const agent = agentPda(agentKp.publicKey);
+  const agentId = new BN(1);
+  const agent = agentPda(agentKp.publicKey, agentId);
   const agentVault = agentVaultPda(agent);
   const ap = programFor(agentKp);
   const tp = programFor(traderKp);
+  const opAccounts = { operator: agentKp.publicKey, agent, agentVault, systemProgram: SystemProgram.programId };
 
   await ap.methods
-    .registerAgent("Test Agent", "integration", ratioBps, drawdownBps)
-    .accounts({ authority: agentKp.publicKey, agent, agentVault, systemProgram: SystemProgram.programId })
+    .createAgent(agentId, "Test Agent", "integration", termsArg(ratioBps, Math.floor(ratioBps / 2), drawdownBps))
+    .accounts(opAccounts)
     .rpc();
   if (bondSol > 0) {
-    await ap.methods
-      .depositCollateral(new BN(bondSol * SOL))
-      .accounts({ authority: agentKp.publicKey, agent, agentVault, systemProgram: SystemProgram.programId })
-      .rpc();
+    await ap.methods.depositCollateral(new BN(bondSol * SOL)).accounts(opAccounts).rpc();
+  }
+  if (publish && bondSol > 0) {
+    await ap.methods.publishAgent().accounts({ operator: agentKp.publicKey, agent }).rpc();
   }
 
   let nonceCounter = 0;
@@ -83,19 +103,22 @@ async function setup(ratioBps = 3000, drawdownBps = 2000, bondSol = 1) {
         .rpc();
       return position;
     },
-    draw: (position: PublicKey, program: Prog = ap, authority: PublicKey = agentKp.publicKey) =>
+    draw: (position: PublicKey, program: Prog = ap, executor: PublicKey = agentKp.publicKey) =>
       program.methods
         .drawFunds()
-        .accounts({ authority, agent, position, positionVault: positionVaultPda(position), systemProgram: SystemProgram.programId })
+        .accounts({ executor, agent, position, positionVault: positionVaultPda(position), systemProgram: SystemProgram.programId })
         .rpc(),
-    settle: (position: PublicKey, returned: number) =>
-      ap.methods
+    settle: (position: PublicKey, returned: number, program: Prog = ap, executor: PublicKey = agentKp.publicKey) =>
+      program.methods
         .settlePosition(new BN(returned))
         .accounts({
-          authority: agentKp.publicKey, agent, agentVault, position,
+          executor, operator: agentKp.publicKey, agent, agentVault, position,
           positionVault: positionVaultPda(position), trader: traderKp.publicKey, systemProgram: SystemProgram.programId,
         })
         .rpc(),
+    publish: () => ap.methods.publishAgent().accounts({ operator: agentKp.publicKey, agent }).rpc(),
+    bindExecutor: (executor: PublicKey) =>
+      ap.methods.setExecutor(executor).accounts({ operator: agentKp.publicKey, agent }).rpc(),
     cancel: (position: PublicKey) =>
       tp.methods
         .cancelPosition()
@@ -110,10 +133,7 @@ async function setup(ratioBps = 3000, drawdownBps = 2000, bondSol = 1) {
         })
         .rpc(),
     withdraw: (lamports: number) =>
-      ap.methods
-        .withdrawCollateral(new BN(lamports))
-        .accounts({ authority: agentKp.publicKey, agent, agentVault, systemProgram: SystemProgram.programId })
-        .rpc(),
+      ap.methods.withdrawCollateral(new BN(lamports)).accounts(opAccounts).rpc(),
   };
   return env;
 }
@@ -127,26 +147,37 @@ describe("collateralized_agents on localnet", () => {
     rentFloor = await connection.getMinimumBalanceForRentExemption(0);
   });
 
-  it("registers an agent and derives the fee from the collateral ratio", async () => {
-    const env = await setup(3000, 2000, 0);
-    const a = await env.agentState();
-    assert.equal(a.collateralRatioBps, 3000);
-    assert.equal(a.feeBps, 1500);
-    assert.equal(a.accepting, true);
-    assert.equal(a.totalCollateral.toNumber(), 0);
-    assert.ok(a.authority.equals(env.agentKp.publicKey));
+  it("creates a draft with published terms, then publishes once bonded", async () => {
+    const env = await setup(3000, 2000, 0, false);
+    let a = await env.agentState();
+    assert.deepEqual(a.status, { draft: {} });
+    assert.equal(a.terms.collateralRatioBps, 3000);
+    assert.equal(a.terms.feeBps, 1500);
+    assert.equal(a.terms.allowedAssets.length, 2);
+    assert.ok(a.operator.equals(env.agentKp.publicKey));
+    await expectAnchorError(env.open(0.1 * SOL, 3600), "AgentNotAccepting");
+    await expectAnchorError(env.publish(), "NoCollateral");
+    await env.ap.methods
+      .depositCollateral(new BN(SOL))
+      .accounts({ operator: env.agentKp.publicKey, agent: env.agent, agentVault: env.agentVault, systemProgram: SystemProgram.programId })
+      .rpc();
+    await env.publish();
+    a = await env.agentState();
+    assert.deepEqual(a.status, { active: {} });
+    assert.ok(a.publishedAt.toNumber() > 0);
   });
 
-  it("rejects a collateral ratio below the minimum", async () => {
+  it("rejects a fee above the collateral cap", async () => {
     const kp = Keypair.generate();
     await fund(kp, 2);
-    const agent = agentPda(kp.publicKey);
+    const agentId = new BN(1);
+    const agent = agentPda(kp.publicKey, agentId);
     await expectAnchorError(
       programFor(kp).methods
-        .registerAgent("Bad", "", 500, 1000)
-        .accounts({ authority: kp.publicKey, agent, agentVault: agentVaultPda(agent), systemProgram: SystemProgram.programId })
+        .createAgent(agentId, "Bad", "", termsArg(3000, 1600, 1000))
+        .accounts({ operator: kp.publicKey, agent, agentVault: agentVaultPda(agent), systemProgram: SystemProgram.programId })
         .rpc(),
-      "InvalidCollateralRatio",
+      "FeeTooHigh",
     );
   });
 
@@ -217,6 +248,7 @@ describe("collateralized_agents on localnet", () => {
     await env.settle(position, 0); // lost everything: shortfall 0.8, guarantee 0.3
     const p = await env.positionState(position);
     assert.equal(p.slashed.toNumber(), 0.3 * SOL);
+    assert.deepEqual(p.breach, { drawdown: {} });
     assert.equal((await balance(env.traderKp.publicKey)) - traderBefore, 0.3 * SOL + rentFloor);
 
     const a = await env.agentState();
@@ -239,20 +271,27 @@ describe("collateralized_agents on localnet", () => {
     await expectAnchorError(env.draw(position), "InvalidStatus");
   });
 
-  it("refuses draws and settles from a wallet that is not the agent authority", async () => {
+  it("lets a bound trading key draw and settle, and refuses anyone else", async () => {
     const env = await setup(3000, 2000, 1);
     const position = await env.open(1 * SOL, 3600);
     const impostor = Keypair.generate();
-    await fund(impostor, 2);
-    // The agent PDA is derived from the authority, so a different signer fails the seeds check.
-    await expectAnchorError(env.draw(position, programFor(impostor), impostor.publicKey), "ConstraintSeeds");
+    const executor = Keypair.generate();
+    await Promise.all([fund(impostor, 2), fund(executor, 3)]);
+    await expectAnchorError(env.draw(position, programFor(impostor), impostor.publicKey), "UnauthorizedExecutor");
+    await env.bindExecutor(executor.publicKey);
+    const ex = programFor(executor);
+    await env.draw(position, ex, executor.publicKey);
+    const opBefore = await balance(env.agentKp.publicKey);
+    await env.settle(position, 1.2 * SOL, ex, executor.publicKey);
+    // 15% of the 0.2 profit goes to the operator wallet.
+    assert.equal((await balance(env.agentKp.publicKey)) - opBefore, 0.03 * SOL);
   });
 
   it("refuses new positions while the agent is paused", async () => {
     const env = await setup(3000, 2000, 1);
-    await env.ap.methods.setAccepting(false).accounts({ authority: env.agentKp.publicKey, agent: env.agent }).rpc();
-    await expectAnchorError(env.open(0.1 * SOL, 3600), "AgentPaused");
-    await env.ap.methods.setAccepting(true).accounts({ authority: env.agentKp.publicKey, agent: env.agent }).rpc();
+    await env.ap.methods.setAccepting(false).accounts({ operator: env.agentKp.publicKey, agent: env.agent }).rpc();
+    await expectAnchorError(env.open(0.1 * SOL, 3600), "AgentNotAccepting");
+    await env.ap.methods.setAccepting(true).accounts({ operator: env.agentKp.publicKey, agent: env.agent }).rpc();
     await env.open(0.1 * SOL, 3600);
   });
 
@@ -272,9 +311,11 @@ describe("collateralized_agents on localnet", () => {
 
     const p = await env.positionState(position);
     assert.deepEqual(p.status, { defaulted: {} });
+    assert.deepEqual(p.breach, { missedDeadline: {} });
     assert.equal(p.slashed.toNumber(), 0.3 * SOL);
     const a = await env.agentState();
     assert.equal(a.defaultedPositions, 1);
+    assert.equal(a.breachCount, 1);
     assert.equal(a.totalCollateral.toNumber(), 0.7 * SOL);
     assert.equal(a.lockedCollateral.toNumber(), 0);
     // the agent cannot settle a defaulted position afterwards

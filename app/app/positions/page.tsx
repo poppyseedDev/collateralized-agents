@@ -134,11 +134,16 @@ export default function Positions() {
                       <>
                         <div>{sol(payout, 3)} SOL to you</div>
                         <div className="tiny">
-                          returned {sol(p.returned, 3)} · fee {sol(p.feePaid, 3)} ·{" "}
-                          <span className={p.slashed.gtn(0) ? "cy" : undefined}>
-                            slashed {sol(p.slashed, 3)}
-                          </span>
+                          {p.breach === "missedDeadline"
+                            ? "agent missed the deadline"
+                            : `returned ${sol(p.returned, 3)} · fee ${sol(p.feePaid, 3)}`}
+                          {p.slashed.gtn(0) && <span className="cy"> · {sol(p.slashed, 3)} from bond</span>}
                         </div>
+                        {p.breach !== "none" && (
+                          <span className="pill defaulted" style={{ marginTop: 4 }}>
+                            {p.breach === "drawdown" ? "Breach: drawdown exceeded" : "Breach: missed deadline"}
+                          </span>
+                        )}
                       </>
                     ) : (
                       "—"

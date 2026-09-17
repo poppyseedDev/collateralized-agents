@@ -3,7 +3,9 @@
 import { useState } from "react";
 import {
   AgentAccount,
+  assetLabel,
   capacity,
+  fmtDuration,
   freeCollateral,
   pct,
   requiredCollateral,
@@ -13,12 +15,25 @@ import {
 import { Avatar } from "./Avatar";
 import { IconArrowDown, IconShield } from "./Icons";
 
-const DURATIONS = [
+const PRESETS = [
   { label: "1H", secs: 3_600 },
   { label: "1D", secs: 86_400 },
   { label: "7D", secs: 7 * 86_400 },
   { label: "30D", secs: 30 * 86_400 },
 ];
+
+/** Deadline choices inside the agent's published trading window. */
+function durationsFor(agent: AgentAccount) {
+  const min = agent.terms.minDurationSecs.toNumber();
+  const max = agent.terms.maxDurationSecs.toNumber();
+  const inside = PRESETS.filter((d) => d.secs >= min && d.secs <= max);
+  if (inside.length) return inside;
+  const short = (s: number) => fmtDuration(s).replace(/ hours?/, "H").replace(/ days?/, "D").replace(" min", "M");
+  return min === max ? [{ label: short(min), secs: min }] : [
+    { label: short(min), secs: min },
+    { label: short(max), secs: max },
+  ];
+}
 
 /** Swap-style widget: what a trader gets when allocating capital to an agent. */
 export function Certificate({
@@ -33,7 +48,8 @@ export function Certificate({
   onOpen: (lamports: number, durationSecs: number) => void;
 }) {
   const [amount, setAmount] = useState("1");
-  const [duration, setDuration] = useState(DURATIONS[1].secs);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [showRules, setShowRules] = useState(false);
 
   const head = (
     <div className="cert-head">
@@ -61,16 +77,18 @@ export function Certificate({
     );
   }
 
+  const durations = durationsFor(agent);
+  const duration = durations.some((d) => d.secs === picked) ? picked! : durations[Math.min(1, durations.length - 1)].secs;
   const value = parseFloat(amount);
   const lamports = toLamports(Number.isFinite(value) ? value : 0);
-  const guaranteed = requiredCollateral(lamports, agent.collateralRatioBps);
+  const guaranteed = requiredCollateral(lamports, agent.terms.collateralRatioBps);
   const cap = capacity(agent);
   const overCap = lamports > cap;
-  const tolerance = Math.floor((lamports * agent.maxDrawdownBps) / 10_000);
+  const tolerance = Math.floor((lamports * agent.terms.maxDrawdownBps) / 10_000);
 
   const label = !connected
     ? "Connect wallet"
-    : !agent.accepting
+    : agent.status !== "active"
       ? "Agent paused"
       : !(lamports > 0)
         ? "Enter an amount"
@@ -114,7 +132,7 @@ export function Certificate({
       <div className="box">
         <div className="box-label">
           <span>Guaranteed to you</span>
-          <span>{pct(agent.collateralRatioBps)} of deposit</span>
+          <span>{pct(agent.terms.collateralRatioBps)} of deposit</span>
         </div>
         <div className="box-row">
           <span className="amount-static">{sol(guaranteed, 3)}</span>
@@ -129,8 +147,8 @@ export function Certificate({
         <div className="cert-row">
           <span className="k">Settlement deadline</span>
           <div className="segmented">
-            {DURATIONS.map((d) => (
-              <button key={d.secs} className={duration === d.secs ? "on" : ""} onClick={() => setDuration(d.secs)}>
+            {durations.map((d) => (
+              <button key={d.secs} className={duration === d.secs ? "on" : ""} onClick={() => setPicked(d.secs)}>
                 {d.label}
               </button>
             ))}
@@ -138,12 +156,22 @@ export function Certificate({
         </div>
         <div className="cert-row">
           <span className="k">Performance fee</span>
-          <span className="v seal">{pct(agent.feeBps)} of profit</span>
+          <span className="v seal">{pct(agent.terms.feeBps)} of profit</span>
         </div>
         <div className="cert-row">
           <span className="k">Loss tolerance</span>
           <span className="v">
-            {pct(agent.maxDrawdownBps)} · {sol(tolerance, 3)} SOL
+            {pct(agent.terms.maxDrawdownBps)} · {sol(tolerance, 3)} SOL
+          </span>
+        </div>
+        <div className="cert-row">
+          <span className="k">Allowed assets</span>
+          <span className="v">{agent.terms.allowedAssets.map((m) => assetLabel(m)).join(", ")}</span>
+        </div>
+        <div className="cert-row">
+          <span className="k">Breaches</span>
+          <span className={"v " + (agent.breachCount > 0 ? "neg" : "")}>
+            {agent.breachCount} of {agent.settledPositions + agent.defaultedPositions} closed
           </span>
         </div>
         <div className="cert-row">
@@ -152,14 +180,19 @@ export function Certificate({
         </div>
       </div>
 
+      <button className="rules-toggle" onClick={() => setShowRules((v) => !v)}>
+        {showRules ? "Hide" : "Read"} the published rules
+      </button>
+      {showRules && <div className="rules-box">{agent.terms.rules}</div>}
+
       <p className="note">
-        If the agent returns less than {pct(10_000 - agent.maxDrawdownBps)} of your SOL, or misses the deadline, up to{" "}
+        If the agent returns less than {pct(10_000 - agent.terms.maxDrawdownBps)} of your SOL, or misses the deadline, up to{" "}
         <b>{sol(guaranteed, 3)} SOL</b> of its bond is paid to you. Free bond now: {sol(freeCollateral(agent))} SOL.
       </p>
 
       <button
         className="btn lg"
-        disabled={!connected || busy || overCap || !agent.accepting || !(lamports > 0)}
+        disabled={!connected || busy || overCap || agent.status !== "active" || !(lamports > 0)}
         onClick={() => onOpen(lamports, duration)}
       >
         {label}

@@ -33,6 +33,13 @@ export const IconConsole = (p: P) => (
     <path d="M9 12l2 2 4-4" />
   </svg>
 );
+export const IconBook = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2V5z" />
+    <path d="M4 19a2 2 0 012-2h13" />
+    <path d="M9 7h6M9 11h4" />
+  </svg>
+);
 export const IconDrop = (p: P) => (
   <svg {...base} {...p}>
     <path d="M12 3s6 6.5 6 11a6 6 0 01-12 0c0-4.5 6-11 6-11z" />

@@ -37,10 +37,14 @@ async function load(fresh: boolean): Promise<ProgramSnapshot> {
     const buf = Buffer.from(data, "base64");
     const disc = buf.subarray(0, 8);
     const publicKey = new PublicKey(pubkey);
-    if (disc.equals(AGENT_DISC)) {
-      agents.push(decodeAgent({ publicKey, account: coder.decode("agent", buf) }));
-    } else if (disc.equals(POSITION_DISC)) {
-      positions.push(decodePosition({ publicKey, account: coder.decode("position", buf) }));
+    try {
+      if (disc.equals(AGENT_DISC)) {
+        agents.push(decodeAgent({ publicKey, account: coder.decode("agent", buf) }));
+      } else if (disc.equals(POSITION_DISC)) {
+        positions.push(decodePosition({ publicKey, account: coder.decode("position", buf) }));
+      }
+    } catch {
+      // Skip accounts that don't match the current layout.
     }
   }
   last = { at: body.at, fetchedAt: Date.now(), stale: body.stale, agents, positions };

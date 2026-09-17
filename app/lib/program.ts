@@ -14,13 +14,19 @@ export const BPS = 10_000;
 export const MIN_RATIO_BPS = 1_000;
 export const MAX_RATIO_BPS = 10_000;
 export const MAX_DRAWDOWN_BPS = 5_000;
-export const FEE_DIVISOR = 2;
+export const FEE_CAP_DIVISOR = 2;
+export const MIN_DURATION_SECS = 60;
+export const MAX_DURATION_SECS = 90 * 24 * 3600;
+export const MAX_NAME_LEN = 32;
+export const MAX_DESCRIPTION_LEN = 128;
+export const MAX_RULES_LEN = 512;
+export const MAX_ALLOWED_ASSETS = 8;
 
 const enc = (s: string) => Buffer.from(s);
 
-export function agentPda(authority: PublicKey) {
+export function agentPda(operator: PublicKey, agentId: BN) {
   return PublicKey.findProgramAddressSync(
-    [enc("agent"), authority.toBuffer()],
+    [enc("agent"), operator.toBuffer(), agentId.toArrayLike(Buffer, "le", 8)],
     PROGRAM_ID,
   )[0];
 }
@@ -74,24 +80,38 @@ export function walletProgram(connection: Connection, wallet: AnchorWallet) {
 
 // ---------- decoded shapes ----------
 
-export type AgentAccount = {
-  publicKey: PublicKey;
-  authority: PublicKey;
-  name: string;
-  strategy: string;
+export type AgentTerms = {
   collateralRatioBps: number;
   feeBps: number;
   maxDrawdownBps: number;
-  accepting: boolean;
+  minDurationSecs: BN;
+  maxDurationSecs: BN;
+  allowedAssets: PublicKey[];
+  rules: string;
+};
+
+export type AgentStatus = "draft" | "active" | "paused";
+
+export type AgentAccount = {
+  publicKey: PublicKey;
+  operator: PublicKey;
+  executor: PublicKey;
+  agentId: BN;
+  status: AgentStatus;
+  name: string;
+  description: string;
+  terms: AgentTerms;
+  createdAt: BN;
+  publishedAt: BN;
   totalCollateral: BN;
   lockedCollateral: BN;
   capitalManaged: BN;
   openPositions: number;
   settledPositions: number;
   defaultedPositions: number;
+  breachCount: number;
   slashedTotal: BN;
   feesEarned: BN;
-  createdAt: BN;
 };
 
 export type PositionStatus =
@@ -100,6 +120,8 @@ export type PositionStatus =
   | "settled"
   | "defaulted"
   | "cancelled";
+
+export type BreachKind = "none" | "drawdown" | "missedDeadline";
 
 export type PositionAccount = {
   publicKey: PublicKey;
@@ -111,6 +133,7 @@ export type PositionAccount = {
   feeBps: number;
   maxDrawdownBps: number;
   status: PositionStatus;
+  breach: BreachKind;
   openedAt: BN;
   deadline: BN;
   drawnAt: BN;
@@ -120,21 +143,29 @@ export type PositionAccount = {
   feePaid: BN;
 };
 
+const enumKey = <T extends string>(v: object) => Object.keys(v)[0] as T;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function decodeAgent(raw: { publicKey: PublicKey; account: any }): AgentAccount {
-  return { publicKey: raw.publicKey, ...raw.account };
+  return { publicKey: raw.publicKey, ...raw.account, status: enumKey<AgentStatus>(raw.account.status) };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function decodePosition(raw: { publicKey: PublicKey; account: any }): PositionAccount {
-  const statusKey = Object.keys(raw.account.status)[0] as PositionStatus;
-  return { publicKey: raw.publicKey, ...raw.account, status: statusKey };
+  return {
+    publicKey: raw.publicKey,
+    ...raw.account,
+    status: enumKey<PositionStatus>(raw.account.status),
+    breach: enumKey<BreachKind>(raw.account.breach),
+  };
 }
+
+export const isPublished = (a: AgentAccount) => a.status !== "draft";
 
 // ---------- math mirrors of the on-chain formulas ----------
 
-export function feeForRatio(ratioBps: number) {
-  return Math.floor(ratioBps / FEE_DIVISOR);
+export function maxFeeForRatio(ratioBps: number) {
+  return Math.floor(ratioBps / FEE_CAP_DIVISOR);
 }
 export function requiredCollateral(principalLamports: number, ratioBps: number) {
   return Math.ceil((principalLamports * ratioBps) / BPS);
@@ -145,7 +176,41 @@ export function freeCollateral(a: AgentAccount) {
 /** Max principal an agent can still back with its free collateral. */
 export function capacity(a: AgentAccount) {
   const free = freeCollateral(a).toNumber();
-  return Math.floor((free * BPS) / a.collateralRatioBps);
+  return Math.floor((free * BPS) / a.terms.collateralRatioBps);
+}
+/** Max principal the agent's whole bond could back. */
+export function maxCapacity(a: AgentAccount) {
+  return Math.floor((a.totalCollateral.toNumber() * BPS) / a.terms.collateralRatioBps);
+}
+
+// ---------- assets ----------
+
+export type AssetInfo = { mint: string; symbol: string; name: string };
+
+const DEVNET_USDC = "BRjpCHtyQLNCo8gqRUr8jtdAj5AjPYQaoqbvcZiHok1k";
+const MAINNET_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+/** Assets offered in the operator form. Operators can also paste any mint. */
+export const KNOWN_ASSETS: AssetInfo[] = [
+  { mint: "So11111111111111111111111111111111111111112", symbol: "SOL", name: "Solana" },
+  { mint: CLUSTER === "mainnet-beta" ? MAINNET_USDC : DEVNET_USDC, symbol: "USDC", name: "USD Coin" },
+  { mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", name: "Tether" },
+  { mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", symbol: "JUP", name: "Jupiter" },
+  { mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", symbol: "BONK", name: "Bonk" },
+];
+
+export function assetLabel(mint: PublicKey | string) {
+  const m = mint.toString();
+  return KNOWN_ASSETS.find((a) => a.mint === m)?.symbol ?? short(m);
+}
+
+// ---------- durations ----------
+
+export function fmtDuration(secs: number) {
+  if (secs % 86_400 === 0) return `${secs / 86_400} day${secs === 86_400 ? "" : "s"}`;
+  if (secs % 3_600 === 0) return `${secs / 3_600} hour${secs === 3_600 ? "" : "s"}`;
+  if (secs % 60 === 0) return `${secs / 60} min`;
+  return `${secs}s`;
 }
 
 // ---------- formatting ----------
