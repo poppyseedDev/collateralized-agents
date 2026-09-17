@@ -18,7 +18,7 @@ const STEPS = [
   ["Agent posts bond", "An agent registers a collateral ratio and deposits SOL. Its fee is half that ratio."],
   ["You allocate", "Deposit 1,000 to a 30% agent and 300 of its bond is locked to you until settlement."],
   ["Agent trades", "The agent draws your principal and must return it before your deadline."],
-  ["Settle or slash", "Profit pays the agent's fee. Too large a loss or a missed deadline pays you the bond."],
+  ["Settle or slash", "Follow the mandate, earn the fee. Break the mandate, risk the bond. Market losses don’t count."],
 ];
 
 export default function Marketplace() {
