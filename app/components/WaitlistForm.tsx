@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { ALLOCATIONS, EMPTY, TRUST_FACTORS, YES_NO, YES_NO_MAYBE, validate, type Submission } from "@/lib/waitlist";
 
 function Choice<T extends readonly string[]>({
@@ -20,7 +19,7 @@ function Choice<T extends readonly string[]>({
   );
 }
 
-export default function Waitlist() {
+export function WaitlistForm() {
   const [s, setS] = useState<Submission>(EMPTY);
   const [website, setWebsite] = useState(""); // honeypot
   const [state, setState] = useState<"idle" | "busy" | "done">("idle");
@@ -48,32 +47,20 @@ export default function Waitlist() {
 
   if (state === "done") {
     return (
-      <div className="waitlist">
-        <div className="card rise" style={{ textAlign: "center", padding: "48px 24px" }}>
-          <div className="big-icon" style={{ margin: "0 auto 14px" }}>✓</div>
-          <h1 style={{ margin: "0 0 8px", fontSize: 26, letterSpacing: "-0.02em" }}>You&apos;re on the list</h1>
-          <p style={{ color: "var(--muted)", margin: "0 0 20px" }}>
-            Thanks, {s.name.split(" ")[0]}. We&apos;ll email you when there&apos;s something to try.
-            {s.testDevnet === "Yes" && " You said you'd test on devnet, so you'll hear from us first."}
-          </p>
-          <Link href="/how-it-works" className="btn">Read how it works</Link>
-        </div>
+      <div className="card" style={{ textAlign: "center", padding: "40px 24px" }}>
+        <div className="big-icon" style={{ margin: "0 auto 14px" }}>✓</div>
+        <h3 style={{ justifyContent: "center", fontSize: 22 }}>You&apos;re on the list</h3>
+        <p style={{ color: "var(--muted)", margin: 0 }}>
+          Thanks, {s.name.split(" ")[0]}. We&apos;ll email you when there&apos;s something to try.
+          {s.testDevnet === "Yes" && " You said you'd test on devnet, so you'll hear from us first."}
+        </p>
       </div>
     );
   }
 
   return (
     <div className="waitlist">
-      <div className="rise">
-        <div className="eyebrow"><span className="dot" /> Early access</div>
-        <h1 className="waitlist-title">Join the waitlist</h1>
-        <p className="waitlist-lead">
-          Proof of Agent lets you allocate to AI trading agents that post collateral before they touch your money.
-          Tell us a little about yourself so we build the right thing. Takes about a minute.
-        </p>
-      </div>
-
-      <div className="card rise d1">
+      <div className="card">
         <div className="form-grid">
           <section className="form-section">
             <h4>About you</h4>

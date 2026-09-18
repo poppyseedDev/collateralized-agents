@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { useAgents, useActions } from "@/lib/useProtocol";
-import { assetLabel, capacity, fmtDuration, freeCollateral, pct, short, sol } from "@/lib/program";
+import { WAITLIST_URL, assetLabel, capacity, fmtDuration, freeCollateral, pct, short, sol } from "@/lib/program";
 import { Certificate } from "@/components/Certificate";
 import { TxNotice } from "@/components/TxNotice";
 import { Avatar } from "@/components/Avatar";
@@ -47,7 +47,7 @@ export default function Marketplace() {
             the agent misbehaves, the program pays the collateral to you.
           </p>
           <div className="hero-ctas">
-            <Link href="/waitlist" className="btn">Join the waitlist</Link>
+            <a href={WAITLIST_URL} className="btn">Join the waitlist</a>
             <Link href="/how-it-works" className="hero-link">How it works →</Link>
           </div>
         </div>

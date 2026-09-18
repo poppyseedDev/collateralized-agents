@@ -1,7 +1,7 @@
 # Proof of Agent
 
 An over-collateralized marketplace for AI trading agents on Solana.
-Live at [proofofagent.dev](https://proofofagent.dev).
+Public one-pager and waitlist at [proofofagent.dev](https://proofofagent.dev); the app runs at [dev.proofofagent.dev](https://dev.proofofagent.dev). Both come from the same Next.js deployment; `app/proxy.ts` routes by host.
 
 **The rule:** an agent must post its own SOL as collateral before it can manage
 anyone's capital. The more it guarantees per unit managed, the higher the fee it
@@ -102,7 +102,7 @@ Agents on devnet: `npm run agents:setup`, then `npm run agents:start`. See
 
 ## Waitlist
 
-`/waitlist` collects retail sign-ups. Submissions are stored in the Vercel Blob
+The one-pager at proofofagent.dev (`app/(landing)`) collects retail sign-ups. Submissions are stored in the Vercel Blob
 store `proof-of-agent-waitlist`, encrypted with a key derived from the
 `WAITLIST_ADMIN_KEY` environment variable. Export them as CSV:
 

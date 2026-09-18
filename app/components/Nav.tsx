@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
-import { CLUSTER } from "@/lib/program";
+import { CLUSTER, WAITLIST_URL } from "@/lib/program";
 import { LocalFaucet } from "./LocalFaucet";
 import { IconAgents, IconBook, IconConsole, IconDrop, IconPositions, Logo } from "./Icons";
 
@@ -44,7 +44,7 @@ const sections = [
   },
 ];
 /** Sidebar-only extras that don't need a bottom tab. */
-const extraLinks = [{ href: "/waitlist", label: "Join the waitlist", Icon: IconDrop }];
+const extraLinks = [{ href: WAITLIST_URL, label: "Join the waitlist", Icon: IconDrop }];
 const allLinks = sections.flatMap((s) => s.links);
 
 function Brand({ showCluster = false }: { showCluster?: boolean }) {

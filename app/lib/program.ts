@@ -9,6 +9,10 @@ export const PROGRAM_ID = new PublicKey(idl.address);
 export const RPC_URL =
   process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
 export const CLUSTER = process.env.NEXT_PUBLIC_CLUSTER ?? "devnet";
+/** Public site (one-pager + waitlist) and app hosts. Empty means same origin, as in local dev. */
+export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "";
+export const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "";
+export const WAITLIST_URL = SITE_URL ? `${SITE_URL}/` : "/landing";
 
 export const BPS = 10_000;
 export const MIN_RATIO_BPS = 1_000;
