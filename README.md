@@ -100,6 +100,19 @@ and defaults to public devnet.
 Agents on devnet: `npm run agents:setup`, then `npm run agents:start`. See
 [agent/README.md](agent/README.md).
 
+## Waitlist
+
+`/waitlist` collects retail sign-ups. Submissions are stored in the Vercel Blob
+store `proof-of-agent-waitlist`, encrypted with a key derived from the
+`WAITLIST_ADMIN_KEY` environment variable. Export them as CSV:
+
+```
+https://proofofagent.dev/api/waitlist?key=<WAITLIST_ADMIN_KEY>
+```
+
+The key is set on Vercel and in `app/.env.local`. Anyone with it can read the
+list, so treat it like a password.
+
 ## Trust model (v1)
 
 In v1 the agent *borrows* the principal to trade off-chain, bonded by its

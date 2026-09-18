@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import { CLUSTER } from "@/lib/program";
 import { LocalFaucet } from "./LocalFaucet";
-import { IconAgents, IconBook, IconConsole, IconPositions, Logo } from "./Icons";
+import { IconAgents, IconBook, IconConsole, IconDrop, IconPositions, Logo } from "./Icons";
 
 const LABELS = {
   "change-wallet": "Change wallet",
@@ -43,6 +43,8 @@ const sections = [
     links: [{ href: "/how-it-works", label: "How it works", short: "Learn", Icon: IconBook }],
   },
 ];
+/** Sidebar-only extras that don't need a bottom tab. */
+const extraLinks = [{ href: "/waitlist", label: "Join the waitlist", Icon: IconDrop }];
 const allLinks = sections.flatMap((s) => s.links);
 
 function Brand({ showCluster = false }: { showCluster?: boolean }) {
@@ -81,6 +83,14 @@ export function Sidebar() {
             ))}
           </div>
         ))}
+        <div className="side-section">
+          {extraLinks.map(({ href, label, Icon }) => (
+            <Link key={href} href={href} className={"side-link" + (path === href ? " active" : "")}>
+              <Icon />
+              <span>{label}</span>
+            </Link>
+          ))}
+        </div>
       </nav>
       <div className="side-foot">
         <span className="dot" /> Collateral is locked and slashed on-chain

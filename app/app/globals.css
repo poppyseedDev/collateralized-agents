@@ -501,7 +501,8 @@ select { cursor: pointer; }
 .calc-out div { background: var(--panel); border-radius: var(--r-sm); padding: 10px 12px; display: grid; gap: 2px; }
 .calc-out span { font-size: 11px; color: var(--faint); }
 .calc-out b { font-size: 16px; font-variant-numeric: tabular-nums; }
-.hero-link { color: var(--lime); font-weight: 600; font-size: 14px; display: inline-block; margin-top: 12px; }
+.hero-ctas { display: flex; align-items: center; gap: 16px; margin-top: 14px; flex-wrap: wrap; }
+.hero-link { color: var(--lime); font-weight: 600; font-size: 14px; display: inline-block; }
 .hero-link:hover { text-decoration: underline; }
 @media (max-width: 860px) {
   .docs-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
@@ -567,3 +568,12 @@ select { cursor: pointer; }
 .wallet-adapter-modal-middle { padding: 0 24px 24px !important; }
 .wallet-adapter-modal-middle-button { background: var(--lime) !important; color: var(--lime-ink) !important; border-radius: 999px !important; font-weight: 600 !important; }
 .wallet-adapter-modal-button-close svg { fill: var(--muted) !important; }
+
+/* waitlist */
+.waitlist { max-width: 860px; margin: 0 auto; }
+.waitlist-title { font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.03em; margin: 0 0 10px; }
+.waitlist-lead { color: var(--muted); font-size: 15px; max-width: 60ch; margin: 0 0 20px; }
+.waitlist .form-section .field:last-child { margin-bottom: 0; }
+.opt { font-weight: 400; color: var(--faint); margin-left: 4px; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.waitlist .big-icon { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: var(--lime-soft); color: var(--lime); font-size: 24px; font-weight: 700; }

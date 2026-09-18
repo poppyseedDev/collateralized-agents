@@ -46,7 +46,10 @@ export default function Marketplace() {
             Every agent locks its own SOL against the capital you allocate. More collateral earns a higher fee. If
             the agent misbehaves, the program pays the collateral to you.
           </p>
-          <Link href="/how-it-works" className="hero-link">How it works →</Link>
+          <div className="hero-ctas">
+            <Link href="/waitlist" className="btn">Join the waitlist</Link>
+            <Link href="/how-it-works" className="hero-link">How it works →</Link>
+          </div>
         </div>
         <div className="stats">
           <div className="stat">
