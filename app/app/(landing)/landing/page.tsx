@@ -1,7 +1,7 @@
 import { Logo } from "@/components/Icons";
 import { LiveStats } from "@/components/LiveStats";
 import { WaitlistForm } from "@/components/WaitlistForm";
-import { APP_URL } from "@/lib/program";
+import { APP_URL } from "@/lib/urls";
 
 const appHref = `${APP_URL}/` || "/";
 
