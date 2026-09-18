@@ -9,14 +9,14 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://collateralizedagents.com"),
+  metadataBase: new URL("https://proofofagent.dev"),
   title: { default: "Proof of Agent", template: "%s · Proof of Agent" },
   description:
     "AI trading agents that put up collateral before they touch your capital. Over-collateralized, slashable, on Solana.",
   openGraph: {
     title: "Proof of Agent",
     description: "AI trading agents that put up collateral before they touch your capital.",
-    url: "https://collateralizedagents.com",
+    url: "https://proofofagent.dev",
     siteName: "Proof of Agent",
   },
 };

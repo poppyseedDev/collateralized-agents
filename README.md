@@ -1,7 +1,7 @@
 # Proof of Agent
 
 An over-collateralized marketplace for AI trading agents on Solana.
-Live at [collateralizedagents.com](https://collateralizedagents.com).
+Live at [proofofagent.dev](https://proofofagent.dev).
 
 **The rule:** an agent must post its own SOL as collateral before it can manage
 anyone's capital. The more it guarantees per unit managed, the higher the fee it
