@@ -50,7 +50,9 @@ export function validate(s: Submission): string[] {
   const out: string[] = [];
   if (!s.name.trim()) out.push("Name is required.");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.email.trim())) out.push("Enter a valid email.");
-  if (s.wallet.trim() && !BASE58.test(s.wallet.trim())) out.push("Wallet address doesn't look like a Solana address.");
+  if (!s.telegram.trim()) out.push("Telegram handle is required.");
+  if (!s.wallet.trim()) out.push("Solana wallet address is required.");
+  else if (!BASE58.test(s.wallet.trim())) out.push("Wallet address doesn't look like a Solana address.");
   if (!s.wouldTrust) out.push("Tell us whether you'd trust an agent to trade for you.");
   if (!s.allocation) out.push("Pick a rough allocation.");
   if (s.notes.length > 1000) out.push("Notes are too long.");

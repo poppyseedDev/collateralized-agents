@@ -66,9 +66,9 @@ export function WaitlistForm() {
             <h4>About you</h4>
             <div className="field"><label>Name</label><input type="text" value={s.name} maxLength={80} onChange={(e) => set({ name: e.target.value })} autoComplete="name" /></div>
             <div className="field"><label>Email</label><input type="email" value={s.email} maxLength={120} onChange={(e) => set({ email: e.target.value })} autoComplete="email" /></div>
-            <div className="field"><label>Telegram <span className="opt">optional</span></label><input type="text" value={s.telegram} maxLength={64} placeholder="@handle" onChange={(e) => set({ telegram: e.target.value })} /></div>
+            <div className="field"><label>Telegram</label><input type="text" value={s.telegram} maxLength={64} placeholder="@handle" onChange={(e) => set({ telegram: e.target.value })} /></div>
             <div className="field"><label>Country or city <span className="opt">optional</span></label><input type="text" value={s.location} maxLength={80} onChange={(e) => set({ location: e.target.value })} /></div>
-            <div className="field"><label>Solana wallet <span className="opt">optional</span></label><input type="text" value={s.wallet} maxLength={64} placeholder="For devnet access and early allocations" onChange={(e) => set({ wallet: e.target.value })} /></div>
+            <div className="field"><label>Solana wallet</label><input type="text" value={s.wallet} maxLength={64} placeholder="Your Solana address, for devnet access and early allocations" onChange={(e) => set({ wallet: e.target.value })} /></div>
             <input type="text" value={website} onChange={(e) => setWebsite(e.target.value)} tabIndex={-1} autoComplete="off" aria-hidden className="hp" />
           </section>
 
