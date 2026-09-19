@@ -1,37 +1,13 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { list, put } from "@vercel/blob";
-import { normalize, validate, type Submission } from "@/lib/waitlist";
+import { normalize, validate } from "@/lib/waitlist";
+import { loadEntries, loadLatestSnapshot, saveEntry, storageConfigured, type Stored } from "@/lib/waitlistStore";
 
 /**
- * POST: store a waitlist submission in Vercel Blob, encrypted with a key
- * derived from WAITLIST_ADMIN_KEY, so a leaked blob URL exposes nothing.
- * GET ?key=WAITLIST_ADMIN_KEY: decrypt and export every submission as CSV.
+ * POST: store a waitlist submission (encrypted, see lib/waitlistStore).
+ * GET ?key=WAITLIST_ADMIN_KEY: export every submission as CSV.
+ *     &snapshot=latest reads the newest daily snapshot instead of the live entries.
  */
 export const runtime = "nodejs";
 
-const cipherKey = () => {
-  const secret = process.env.WAITLIST_ADMIN_KEY;
-  if (!secret) throw new Error("WAITLIST_ADMIN_KEY is not set");
-  return createHash("sha256").update(secret).digest();
-};
-
-function encrypt(plain: string): string {
-  const iv = randomBytes(12);
-  const c = createCipheriv("aes-256-gcm", cipherKey(), iv);
-  const body = Buffer.concat([c.update(plain, "utf8"), c.final()]);
-  return Buffer.concat([iv, c.getAuthTag(), body]).toString("base64");
-}
-
-function decrypt(b64: string): string {
-  const buf = Buffer.from(b64, "base64");
-  const d = createDecipheriv("aes-256-gcm", cipherKey(), buf.subarray(0, 12));
-  d.setAuthTag(buf.subarray(12, 28));
-  return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString("utf8");
-}
-
-type Stored = Submission & { id: string; submittedAt: string; userAgent: string };
-
-const PREFIX = "waitlist/";
 const recent = new Map<string, number[]>();
 
 function rateLimited(ip: string) {
@@ -43,7 +19,7 @@ function rateLimited(ip: string) {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN || !process.env.WAITLIST_ADMIN_KEY) {
+  if (!storageConfigured()) {
     return Response.json({ error: "Waitlist storage is not configured." }, { status: 503 });
   }
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
@@ -66,11 +42,7 @@ export async function POST(req: Request) {
 
   const id = crypto.randomUUID();
   const stored: Stored = { ...s, id, submittedAt: new Date().toISOString(), userAgent: req.headers.get("user-agent") ?? "" };
-  await put(`${PREFIX}${stored.submittedAt.slice(0, 10)}/${id}.enc`, encrypt(JSON.stringify(stored)), {
-    access: "public", // the store is public; contents are encrypted and the path is unguessable
-    contentType: "text/plain",
-    addRandomSuffix: true,
-  });
+  await saveEntry(stored);
   return Response.json({ ok: true });
 }
 
@@ -79,22 +51,8 @@ export async function GET(req: Request) {
   const expected = process.env.WAITLIST_ADMIN_KEY;
   if (!expected || !key || key !== expected) return new Response("Not found", { status: 404 });
 
-  const rows: Stored[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({ prefix: PREFIX, cursor, limit: 1000 });
-    for (const b of page.blobs) {
-      const res = await fetch(b.downloadUrl ?? b.url, { cache: "no-store" });
-      if (!res.ok) continue;
-      try {
-        rows.push(JSON.parse(decrypt(await res.text())) as Stored);
-      } catch {
-        // skip anything that isn't one of our encrypted entries
-      }
-    }
-    cursor = page.hasMore ? page.cursor : undefined;
-  } while (cursor);
-  rows.sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
+  const fromSnapshot = new URL(req.url).searchParams.get("snapshot") === "latest";
+  const rows: Stored[] = fromSnapshot ? ((await loadLatestSnapshot())?.entries ?? []) : await loadEntries();
 
   const cols: (keyof Stored)[] = [
     "submittedAt", "name", "email", "telegram", "location", "wallet", "tradesCrypto", "usedAgents", "wouldTrust",

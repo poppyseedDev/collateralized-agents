@@ -110,8 +110,23 @@ store `proof-of-agent-waitlist`, encrypted with a key derived from the
 https://proofofagent.dev/api/waitlist?key=<WAITLIST_ADMIN_KEY>
 ```
 
-The key is set on Vercel and in `app/.env.local`. Anyone with it can read the
-list, so treat it like a password.
+The key is set on Vercel, in `app/.env.local`, and in the macOS Keychain
+(account `proofofagent`, service `WAITLIST_ADMIN_KEY`). Anyone with it can read
+the list, so treat it like a password. Entries are encrypted with it, so never
+rotate it without re-encrypting.
+
+Backups:
+
+- **Daily snapshot on Vercel.** A cron job (`vercel.json`, 03:00 UTC) calls
+  `/api/waitlist/backup`, which writes every entry into one encrypted file
+  under `waitlist-snapshots/`. Recover from the newest one with
+  `/api/waitlist?key=…&snapshot=latest`.
+- **Daily copy on the Mac.** `app/scripts/waitlist-backup.sh` is installed to
+  `~/Library/Application Support/ProofOfAgent/` and run by the launchd job
+  `dev.proofofagent.waitlist-backup` at 10:00. It keeps the newest 90 CSVs in
+  `…/ProofOfAgent/backups/waitlist/` and warns in `backup.log` if the entry
+  count ever drops. Run from a terminal, it also copies to `~/Documents` and
+  iCloud Drive, which macOS hides from background jobs.
 
 ## Trust model (v1)
 
