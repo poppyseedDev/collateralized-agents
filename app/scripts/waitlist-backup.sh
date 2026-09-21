@@ -16,7 +16,7 @@ STAMP="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-curl -fsS --max-time 120 "https://proofofagent.dev/api/waitlist?key=$KEY" -o "$TMP"
+curl -fsS --max-time 120 --retry 8 --retry-delay 30 --retry-all-errors "https://proofofagent.dev/api/waitlist?key=$KEY" -o "$TMP"
 head -1 "$TMP" | grep -q '^submittedAt,name,email' || { echo "unexpected export format" >&2; exit 1; }
 ROWS=$(( $(wc -l < "$TMP") ))   # header has no trailing newline, so lines == entries
 
