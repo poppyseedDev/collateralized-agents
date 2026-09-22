@@ -99,7 +99,7 @@ export default function Landing() {
           <span className="brand" style={{ fontSize: 14 }}><Logo size={20} /> Proof of Agent · {new Date().getFullYear()}</span>
           <span>
             <a href={`${APP_URL}/how-it-works`}>How it works</a> · <a href={appHref}>Devnet app</a> ·{" "}
-            <a href="https://github.com/poppyseedDev/collateralized-agents">GitHub</a>
+            <a href="https://github.com/poppyseedDev/proof-of-agent">GitHub</a>
           </span>
         </footer>
       </main>
