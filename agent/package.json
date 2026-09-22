@@ -6,7 +6,8 @@
     "setup": "tsx src/setup.ts",
     "start": "tsx src/runner.ts",
     "seed-positions": "tsx src/seed-positions.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bad-operator": "tsx src/bad-operator.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
