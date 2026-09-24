@@ -6,8 +6,13 @@ reason other than a bad strategy or dishonesty?**
 ```bash
 python3 sim/fetch_prices.py   # cache real SOL/USD daily closes (Binance, no key)
 python3 sim/run.py            # full sweep -> sim/results/
-python3 sim/export_web.py     # condense -> app/lib/simulation.json
+python3 sim/export_web.py     # summary tables -> app/lib/simulation.json
+python3 sim/export_charts.py  # chart data   -> app/lib/simulationCharts.json
 ```
+
+The charts are at [/simulation](https://dev.proofofagent.dev/simulation) in the
+app: the price history, equity curves in SOL and in dollars, the distribution
+of what comes back at settlement, and breach rate against operator return.
 
 No dependencies beyond the Python standard library.
 
@@ -85,3 +90,4 @@ not make theft unprofitable. See `docs/settlement.md`.
 | `strategies.py` | The strategies, all SOL-denominated |
 | `run.py` | Sweeps duration, tolerance and ratio; writes `results/` |
 | `export_web.py` | Condenses results for the How it works page |
+| `export_charts.py` | Equity curves, distributions and trade-off lines for the charts |

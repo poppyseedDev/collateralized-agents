@@ -45,6 +45,12 @@ export const IconDrop = (p: P) => (
     <path d="M12 3s6 6.5 6 11a6 6 0 01-12 0c0-4.5 6-11 6-11z" />
   </svg>
 );
+export const IconChart = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 19V5M4 19h16" />
+    <path d="M7.5 15.5l3.5-5 3 3 4.5-7" />
+  </svg>
+);
 export const IconArrowDown = (p: P) => (
   <svg {...base} {...p}>
     <path d="M12 5v14M6 13l6 6 6-6" />

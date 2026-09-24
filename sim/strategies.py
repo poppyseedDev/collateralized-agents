@@ -14,10 +14,12 @@ import random
 SWAP_COST = 0.0015  # 15 bps per leg: DEX fee + slippage on a liquid SOL pair
 
 
-def _walk(history, i0, i1, want_sol, cost=SWAP_COST):
+def _walk(history, i0, i1, want_sol, cost=SWAP_COST, record=None):
     """Run a daily in-SOL / in-USDC schedule and return the final SOL multiple.
 
     want_sol(t) -> bool decides the exposure held over day t -> t+1.
+    If `record` is a list, the SOL-denominated value is appended for each day,
+    which is what the equity-curve charts draw.
     """
     sol = 1.0          # SOL held while in SOL
     usd = 0.0          # USD held while in USDC
@@ -33,8 +35,12 @@ def _walk(history, i0, i1, want_sol, cost=SWAP_COST):
                 sol = usd / p * (1 - cost)
                 usd = 0.0
             in_sol = target
+        if record is not None:
+            record.append(sol if in_sol else usd / history[t])
     if not in_sol:  # must end in SOL to settle
         sol = usd / history[i1] * (1 - cost)
+    if record is not None:
+        record.append(sol)
     return sol
 
 
@@ -113,6 +119,46 @@ def leveraged_chaser(history, i0, i1, rng, leverage=3.0):
 def dishonest(history, i0, i1, rng):
     """Draws the principal and returns nothing."""
     return 0.0
+
+
+def trace(key, history, i0, i1, rng):
+    """SOL-denominated value for each day of a window, starting at 1.0 SOL.
+
+    Used for the equity-curve chart. Mirrors the strategy functions exactly.
+    """
+    n = i1 - i0 + 1
+    if key == "hold":
+        return [1.0] * n
+    if key == "dishonest":
+        return [1.0] * (n - 1) + [0.0]
+    if key == "leveraged_chaser":
+        out, sol = [1.0], 1.0
+        for t in range(i0 + 1, i1 + 1):
+            move = history[t] / history[t - 1] - 1.0
+            signal = 1.0 if history[t - 1] >= _sma(history, t - 1, 5) else -1.0
+            exposure = 1.0 + 3.0 * signal
+            sol = max(0.0, sol * (1.0 + (exposure - 1.0) * move - SWAP_COST))
+            out.append(sol)
+        return out[:n] + [out[-1]] * max(0, n - len(out))
+
+    rec = []
+    cost = SWAP_COST * 2 if key == "overtrader" else SWAP_COST
+    if key == "momentum":
+        want = lambda t: _sma(history, t, 10) >= _sma(history, t, 30)
+    elif key == "mean_reversion":
+        want = lambda t: history[t] < _sma(history, t, 20)
+    elif key == "coinflip":
+        want = lambda t: rng.random() < 0.5
+    elif key == "overtrader":
+        state = {"v": True}
+
+        def want(t):
+            state["v"] = not state["v"]
+            return state["v"]
+    else:
+        raise ValueError(f"unknown strategy {key}")
+    _walk(history, i0, i1, want, cost=cost, record=rec)
+    return rec
 
 
 STRATEGIES = {

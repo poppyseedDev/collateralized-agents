@@ -357,6 +357,12 @@ function OperatorRisk() {
         SOL falls. The bond is only ever paid out for returning fewer SOL than the floor.
       </p>
 
+      <p>
+        <Link className="btn" href="/simulation">
+          See the charts →
+        </Link>
+      </p>
+
       <h3>What we simulated</h3>
       <dl className="sim-legend">
         {SIM.strategies.map((st) => (
@@ -507,8 +513,10 @@ function OperatorRisk() {
         <li>Dishonesty costs the operator the whole reserved bond, but at any ratio below 100% they still keep more than they lose. The bond makes bad trading expensive, not theft unprofitable.</li>
       </ul>
       <p className="tiny">
-        Source data: {SIM.source}. The simulation is in <code>sim/</code> in the repository and runs with no
-        dependencies beyond the Python standard library.
+        Source data: {SIM.source}. The <Link href="/simulation">charts</Link> show the same run in full: price
+        history, equity curves in SOL and in dollars, the distribution of what comes back at settlement, and how
+        breach rate trades off against operator return. The simulation is in <code>sim/</code> in the repository
+        and runs with no dependencies beyond the Python standard library.
       </p>
     </>
   );

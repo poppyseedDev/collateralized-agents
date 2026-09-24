@@ -18,6 +18,7 @@
   --amber: #f5b84a;
   --amber-soft: rgba(245, 184, 74, 0.12);
   --violet: #a78bfa;
+  --orange: #fb923c;
   --r-lg: 20px;
   --r-md: 14px;
   --r-sm: 10px;
@@ -732,4 +733,49 @@ select { cursor: pointer; }
   .sim-legend-row { grid-template-columns: 1fr; gap: 4px; }
   .sim-matrix { font-size: 12px; }
   .sim-matrix th, .sim-matrix td { padding: 8px 5px; }
+}
+
+/* Simulation report */
+.sim-page { max-width: 900px; margin: 0 auto; display: grid; gap: 16px; }
+/* Grid items default to min-width:auto, which lets a wide SVG stretch the
+   whole page on a phone. */
+.sim-page > * { min-width: 0; }
+.sim-hero { padding: 8px 4px 4px; }
+.sim-hero h1 { font-size: 30px; letter-spacing: -0.02em; margin: 8px 0 12px; }
+.sim-hero .lead { color: var(--muted); font-size: 15px; line-height: 1.65; max-width: 70ch; margin: 0 0 16px; }
+.sim-hero-links { display: flex; gap: 8px; flex-wrap: wrap; }
+.sim-section { padding: 22px 24px 20px; }
+.sim-section h2 { font-size: 19px; letter-spacing: -0.01em; margin: 6px 0 8px; }
+.sim-section h3 { font-size: 13px; color: var(--faint); font-weight: 600; margin: 20px 0 6px;
+  text-transform: uppercase; letter-spacing: 0.05em; }
+.sim-section > p { color: var(--muted); font-size: 14px; line-height: 1.65; margin: 0 0 14px; max-width: 72ch; }
+.sim-note { color: var(--faint); border-left: 2px solid var(--border-strong); padding-left: 12px; margin-top: 14px; }
+
+.chart { margin: 4px 0 2px; min-width: 0; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .marker { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .crosshair { stroke: var(--border-strong); stroke-width: 1; }
+.chart .axis { fill: var(--faint); font-size: 10px; font-family: var(--sans); }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px;
+  font-size: 12px; color: var(--muted); }
+.chart-legend span, .chart-read span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend i, .chart-read i { width: 9px; height: 2px; border-radius: 2px; flex: 0 0 auto; }
+.chart-read { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; padding: 8px 10px;
+  background: var(--panel-2); border-radius: var(--r-sm); font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.chart-read b { color: var(--text); font-weight: 600; }
+.chart-read-x { color: var(--text); font-weight: 600; }
+.chart-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.chart-toolbar .segmented { overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.chart-toolbar .segmented::-webkit-scrollbar { display: none; }
+.chart-toolbar .segmented button { flex: 0 0 auto; }
+.chart-slider { display: grid; gap: 7px; font-size: 12px; color: var(--muted); font-weight: 500;
+  margin: 0 0 14px; max-width: 420px; }
+
+@media (max-width: 720px) {
+  .sim-hero h1 { font-size: 24px; }
+  .sim-section { padding: 18px 15px 16px; }
+  .sim-section h2 { font-size: 17px; }
+  .chart-legend { font-size: 11px; gap: 5px 10px; }
 }

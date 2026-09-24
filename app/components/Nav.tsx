@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import { CLUSTER, WAITLIST_URL } from "@/lib/program";
 import { Faucet } from "./Faucet";
 import { AgentsOnline } from "./AgentsOnline";
-import { IconAgents, IconBook, IconConsole, IconDrop, IconPositions, Logo } from "./Icons";
+import { IconAgents, IconBook, IconChart, IconConsole, IconDrop, IconPositions, Logo } from "./Icons";
 
 const LABELS = {
   "change-wallet": "Change wallet",
@@ -48,7 +48,10 @@ const sections = [
   },
 ];
 /** Sidebar-only extras that don't need a bottom tab. */
-const extraLinks = [{ href: WAITLIST_URL, label: "Join the waitlist", Icon: IconDrop }];
+const extraLinks = [
+  { href: "/simulation", label: "Simulation", Icon: IconChart },
+  { href: WAITLIST_URL, label: "Join the waitlist", Icon: IconDrop },
+];
 const allLinks = sections.flatMap((s) => s.links);
 
 function Brand({ showCluster = false }: { showCluster?: boolean }) {
