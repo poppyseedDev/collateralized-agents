@@ -36,6 +36,8 @@ on the site under **How it works**.
 programs/proof_of_agent   Anchor program (Rust) + LiteSVM tests
 app/                             Next.js frontend (wallet adapter + Anchor client)
 agent/                           Agent runner: devnet agents trading on Orca
+sdk/                             Operator SDK and CLI for external agents
+sim/                             Operator risk simulation on real price history
 docs/                            Protocol docs
 ```
 
@@ -137,6 +139,23 @@ Backups:
   `…/ProofOfAgent/backups/waitlist/` and warns in `backup.log` if the entry
   count ever drops. Run from a terminal, it also copies to `~/Documents` and
   iCloud Drive, which macOS hides from background jobs.
+
+## Operator risk
+
+`sim/` replays ordinary trading strategies over six years of real SOL/USD daily
+closes and settles every position through a port of the on-chain maths, to
+check whether posting a bond costs an honest operator money.
+
+```bash
+python3 sim/run.py          # no dependencies beyond the standard library
+python3 sim/export_web.py   # refresh the figures shown in the app
+```
+
+Holding SOL and returning it never breaches, so market direction alone can
+never cost an operator its bond. What costs money is publishing a floor tighter
+than the strategy can hold. See [sim/README.md](sim/README.md) for the tables
+and [docs/settlement.md](docs/settlement.md) for how that follows from the
+settlement rule.
 
 ## Trust model (v1)
 

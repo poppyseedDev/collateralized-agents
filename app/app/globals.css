@@ -673,3 +673,63 @@ select { cursor: pointer; }
 .cstep b { display: block; margin: 3px 0 4px; }
 .cstep p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .faucet.wide .faucet-label { display: inline; }
+
+/* How it works — operator risk simulation */
+.sim-controls { display: grid; gap: 14px; margin-bottom: 16px; }
+.sim-controls label { display: grid; gap: 8px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.sim-controls .segmented { overflow-x: auto; justify-content: flex-start; scrollbar-width: none; }
+.sim-controls .segmented::-webkit-scrollbar { display: none; }
+.sim-controls .segmented button { flex: 0 0 auto; }
+
+.sim-legend { display: grid; gap: 2px; margin: 10px 0 20px; }
+.sim-legend-row { display: grid; grid-template-columns: 190px 1fr; gap: 12px; align-items: baseline;
+  padding: 9px 0; border-bottom: 1px solid var(--border); }
+.sim-legend-row:last-child { border-bottom: 0; }
+.sim-legend dt { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text); }
+.sim-legend dd { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+.sim-kind { padding: 2px 7px; border-radius: 999px; font-size: 9.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em; background: var(--panel-3); color: var(--faint); white-space: nowrap; }
+.baseline .sim-kind { background: var(--panel-3); color: var(--muted); }
+.ordinary .sim-kind { background: var(--cyan-soft); color: var(--cyan); }
+.bad .sim-kind { background: var(--amber-soft); color: var(--amber); }
+.dishonest .sim-kind { background: var(--red-soft); color: var(--red); }
+
+.sim-table { font-variant-numeric: tabular-nums; }
+/* The docs column is narrow until the layout reaches its full width, so the
+   results table becomes one card per strategy well before phone widths. */
+@media (min-width: 1041px) {
+  .sim-table th, .sim-table td { padding: 10px 8px; }
+  .sim-table th:first-child, .sim-table td:first-child { padding-left: 0; }
+  .sim-table td:first-child { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .sim-table th:not(:first-child), .sim-table td:not(:first-child) { text-align: right; }
+}
+@media (max-width: 1040px) {
+  .sim-table, .sim-table tbody, .sim-table tr { display: block; width: 100%; }
+  .sim-table thead { display: none; }
+  .sim-table tr { background: var(--panel); border-radius: var(--r-md); padding: 11px 13px;
+    margin-bottom: 6px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; }
+  .sim-table td { display: block; border: 0; padding: 0; white-space: nowrap; font-size: 13px; }
+  .sim-table td:first-child { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px;
+    font-weight: 600; color: var(--text); white-space: normal; }
+  .sim-table td:not(:first-child)::before { content: attr(data-label); display: block; font-size: 9.5px;
+    color: var(--faint); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 3px; font-weight: 600; }
+}
+
+.sim-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--faint); }
+.sim-row.baseline .sim-dot { background: var(--muted); }
+.sim-row.ordinary .sim-dot { background: var(--cyan); }
+.sim-row.bad .sim-dot { background: var(--amber); }
+.sim-row.dishonest .sim-dot { background: var(--red); }
+
+.sim-matrix { font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.sim-matrix th, .sim-matrix td { padding: 9px 7px; }
+.sim-matrix th:first-child, .sim-matrix td:first-child { padding-left: 0; }
+.sim-matrix td:not(:first-child) { text-align: right; color: var(--text); }
+.sim-matrix th:not(:first-child) { text-align: right; }
+
+@media (max-width: 860px) {
+  .sim-legend-row { grid-template-columns: 1fr; gap: 4px; }
+  .sim-matrix { font-size: 12px; }
+  .sim-matrix th, .sim-matrix td { padding: 8px 5px; }
+}

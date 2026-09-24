@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
+import { SIM, lookup, safeDrawdown } from "@/lib/simulation";
+
 const SECTIONS = [
   { id: "overview", title: "Overview" },
   { id: "traders", title: "For traders" },
@@ -11,6 +13,7 @@ const SECTIONS = [
   { id: "examples", title: "Worked examples" },
   { id: "lifecycle", title: "Position lifecycle" },
   { id: "limits", title: "What the bond covers" },
+  { id: "risk", title: "What operators risk" },
   { id: "glossary", title: "Glossary" },
 ] as const;
 
@@ -71,6 +74,7 @@ export default function HowItWorks() {
         {active === "examples" && <Examples />}
         {active === "lifecycle" && <Lifecycle />}
         {active === "limits" && <Limits />}
+        {active === "risk" && <OperatorRisk />}
         {active === "glossary" && <Glossary />}
 
         <div className="docs-pager">
@@ -310,6 +314,201 @@ function Limits() {
       <p className="tiny">
         The program is currently on Solana devnet. Devnet prices come from test pools, so results there show that the
         mechanics work, not how a strategy would perform with real money.
+      </p>
+    </>
+  );
+}
+
+const KIND_LABEL: Record<string, string> = {
+  baseline: "Baseline",
+  ordinary: "Ordinary",
+  bad: "Bad",
+  dishonest: "Dishonest",
+};
+
+function pct(x: number, digits = 1) {
+  return `${(x * 100).toFixed(digits)}%`;
+}
+
+/** The matrix shows the arc across position lengths; four points tell the story. */
+const MATRIX_DURATIONS = [1, 7, 30, 90];
+
+function OperatorRisk() {
+  const [duration, setDuration] = useState(30);
+  const [drawdown, setDrawdown] = useState(2000);
+  const [ratio, setRatio] = useState(3000);
+
+  return (
+    <>
+      <p className="lead">
+        Posting collateral only makes sense if an honest operator keeps it. We simulated that on{" "}
+        {SIM.candles.toLocaleString()} days of real SOL price history, from {SIM.firstDate} to {SIM.lastDate},
+        opening a position on every single date and settling it through the same equation the program uses.
+      </p>
+      <p>
+        Each figure below is an average over roughly {SIM.positionsPerCell.toLocaleString()} overlapping positions,
+        with {SIM.swapCostBps} basis points of swap cost charged on every trade. The answer is that the bond is
+        never at risk from the market, only from promising a floor the strategy cannot hold.
+      </p>
+
+      <div className="formula">holding SOL and returning it breaches 0% of positions, at every tolerance and every length</div>
+      <p>
+        That is the whole point of settling in SOL. An operator who does nothing can never be slashed, however far
+        SOL falls. The bond is only ever paid out for returning fewer SOL than the floor.
+      </p>
+
+      <h3>What we simulated</h3>
+      <dl className="sim-legend">
+        {SIM.strategies.map((st) => (
+          <div key={st.key} className={`sim-legend-row ${st.kind}`}>
+            <dt>
+              {st.label}
+              <span className="sim-kind">{KIND_LABEL[st.kind]}</span>
+            </dt>
+            <dd>{st.description}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <h3>Try the terms</h3>
+      <div className="calc">
+        <div className="sim-controls">
+          <label>
+            Position length
+            <div className="segmented">
+              {SIM.durations.map((d) => (
+                <button key={d} className={d === duration ? "on" : ""} onClick={() => setDuration(d)}>
+                  {d}d
+                </button>
+              ))}
+            </div>
+          </label>
+          <label>
+            Drawdown tolerance
+            <div className="segmented">
+              {SIM.drawdowns.map((d) => (
+                <button key={d} className={d === drawdown ? "on" : ""} onClick={() => setDrawdown(d)}>
+                  {d / 100}%
+                </button>
+              ))}
+            </div>
+          </label>
+          <label>
+            Collateral ratio
+            <div className="segmented">
+              {SIM.ratios.map((r) => (
+                <button key={r} className={r === ratio ? "on" : ""} onClick={() => setRatio(r)}>
+                  {r / 100}%
+                </button>
+              ))}
+            </div>
+          </label>
+        </div>
+
+        <table className="docs-table sim-table">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Breached</th>
+              <th>Operator</th>
+              <th>Trader</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SIM.strategies.map((st) => {
+              const cell = lookup(st.key, duration, drawdown, ratio);
+              if (!cell) return null;
+              return (
+                <tr key={st.key} className={`sim-row ${st.kind}`}>
+                  <td data-label="Strategy">
+                    <i className="sim-dot" aria-hidden />
+                    {st.label}
+                  </td>
+                  <td data-label="Breached">{pct(cell.breach)}</td>
+                  <td data-label="Operator">
+                    <b className={cell.apr >= 0 ? "pos" : "neg"}>
+                      {cell.apr >= 0 ? "+" : ""}
+                      {pct(cell.apr, 0)}
+                    </b>
+                  </td>
+                  <td data-label="Trader">
+                    <span className={cell.trader >= 0 ? "pos" : "neg"}>
+                      {cell.trader >= 0 ? "+" : ""}
+                      {pct(cell.trader, 1)}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="tiny">
+          Breached is how often collateral was paid out. Operator is the annual return on a fully deployed bond,
+          so it already accounts for backing more capital at a lower ratio. Trader is the average SOL outcome of one
+          position, after fees and any collateral paid out.
+        </p>
+      </div>
+
+      <h3>Pick a tolerance your strategy can hold</h3>
+      <p>
+        An operator is not punished for being mediocre. They are punished for publishing a floor their strategy
+        cannot stay above. This is the tightest tolerance each strategy can publish and still expect to profit, at a
+        30% collateral ratio.
+      </p>
+      <table className="docs-table sim-matrix">
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            {MATRIX_DURATIONS.map((d) => (
+              <th key={d}>{d}d</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {SIM.strategies.map((st) => (
+            <tr key={st.key}>
+              <td data-label="Strategy">{st.label}</td>
+              {MATRIX_DURATIONS.map((d) => {
+                const bps = safeDrawdown(st.key, d);
+                return (
+                  <td key={d} data-label={`${d}d`}>
+                    {bps === null ? (
+                      <span className="neg" title="No tolerance the program allows makes this profitable">
+                        —
+                      </span>
+                    ) : (
+                      `${bps / 100}%`
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p>
+        A dash means no tolerance the program allows makes that strategy profitable over that length. Genuinely
+        reckless strategies run out of room past a few weeks; honest ones never do.
+      </p>
+
+      <h3>More collateral pays the operator better</h3>
+      <p>
+        Because the fee cap scales with the ratio while a slash is capped by the size of the loss, fee income per SOL
+        of bond is the same at every ratio, but slash risk falls as the ratio rises. Raising the collateral ratio in
+        the panel above moves the operator column up for every strategy. An operator maximising return on their
+        collateral posts more of it, which is what traders want.
+      </p>
+
+      <h3>What this does not show</h3>
+      <ul className="bullets">
+        <li>These are SOL/USDC rotations on daily closes. A strategy trading other assets has its own tracking error against SOL, and its own safe tolerance.</li>
+        <li>Six years of history is one sample. It covers two large drawdowns and two rallies, but the next regime can differ.</li>
+        <li>Nothing here says a trader makes money. The protocol makes an agent accountable to its published floor; it does not create returns.</li>
+        <li>Dishonesty costs the operator the whole reserved bond, but at any ratio below 100% they still keep more than they lose. The bond makes bad trading expensive, not theft unprofitable.</li>
+      </ul>
+      <p className="tiny">
+        Source data: {SIM.source}. The simulation is in <code>sim/</code> in the repository and runs with no
+        dependencies beyond the Python standard library.
       </p>
     </>
   );

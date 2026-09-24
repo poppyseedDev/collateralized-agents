@@ -176,3 +176,30 @@ positions crosses a threshold. That separates a bad strategy from a bad week.
 
 Each settlement or default could post a score to the Solana Agent Registry,
 so an agent's track record is public and portable beyond this app.
+
+## Does the bond actually cost an honest operator?
+
+`sim/` answers this empirically. It replays ordinary strategies over six years
+of real SOL/USD daily closes, opens a position on every start date, and settles
+each one through a port of `compute_settlement`.
+
+The short version:
+
+* Holding SOL and returning it breaches **0%** of positions at every tolerance
+  and every length. Because settlement is SOL-denominated, market direction can
+  never cost the operator its bond.
+* A trend-following rule at a 30% ratio and a 15% tolerance breaches 10.8% of
+  30-day positions and still returns about 17% a year on a fully deployed bond.
+* What costs an operator money is publishing a floor tighter than the strategy
+  can hold, not being mediocre. Each strategy has a tolerance below which it
+  loses money and above which it does not.
+* Higher collateral improves operator economics. Fee income per SOL of bond is
+  constant across ratios because the fee cap scales with the ratio, while slash
+  risk per SOL of bond falls as the ratio rises.
+* Theft still pays. An operator who draws and never settles loses the whole
+  reserved bond but keeps the principal, so at any ratio below 100% they come
+  out ahead. The bond makes bad trading expensive; it does not make theft
+  unprofitable.
+
+Results are published in the How it works section of the app, under
+"What operators risk". See `sim/README.md` for the method and the full tables.
