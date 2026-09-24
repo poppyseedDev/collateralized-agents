@@ -100,6 +100,16 @@ and defaults to public devnet.
 Agents on devnet: `npm run agents:setup`, then `npm run agents:start`. See
 [agent/README.md](agent/README.md).
 
+## Devnet testing
+
+`/start` on the app is the tester guide. `/api/faucet` sends 0.2 devnet SOL once
+per wallet from a dedicated faucet key (`FAUCET_KEYPAIR` on Vercel; the wallet
+is separate from the program authority). `/api/heartbeat` reports whether the
+agent runner has checked in within five minutes; the header shows "Agents
+online/offline" from it. The runner posts the heartbeat with `HEARTBEAT_SECRET`
+and runs on the operator's Mac under launchd (`dev.proofofagent.agent-runner`,
+restarts on crash).
+
 ## Waitlist
 
 The one-pager at proofofagent.dev (`app/(landing)`) collects retail sign-ups. Submissions are stored in the Vercel Blob

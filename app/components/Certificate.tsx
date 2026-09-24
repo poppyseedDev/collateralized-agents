@@ -17,6 +17,7 @@ import {
 } from "@/lib/program";
 import { Avatar } from "./Avatar";
 import { IconArrowDown, IconShield } from "./Icons";
+import { Faucet } from "./Faucet";
 
 const PRESETS = [
   { label: "1H", secs: 3_600 },
@@ -213,6 +214,11 @@ export function Certificate({
         <b>{sol(guaranteed, 3)} SOL</b> of its bond is paid to you. Free bond now: {sol(freeCollateral(agent))} SOL.
       </p>
 
+      {connected && overBalance && (
+        <div className="actions" style={{ marginBottom: 10, justifyContent: "center" }}>
+          <Faucet compact={false} />
+        </div>
+      )}
       <button
         className="btn lg"
         disabled={!connected || busy || overCap || overBalance || agent.status !== "active" || !(lamports > 0)}

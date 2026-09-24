@@ -246,6 +246,24 @@ class AgentRunner {
   }
 }
 
+const HEARTBEAT_URL = process.env.HEARTBEAT_URL ?? "https://dev.proofofagent.dev/api/heartbeat";
+const HEARTBEAT_SECRET = process.env.HEARTBEAT_SECRET;
+
+/** Tells the site the runner is alive so testers can see whether agents are online. */
+async function heartbeat(agents: string[], note?: string) {
+  if (!HEARTBEAT_SECRET) return;
+  try {
+    await fetch(HEARTBEAT_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${HEARTBEAT_SECRET}` },
+      body: JSON.stringify({ agents, note }),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (e) {
+    console.log("heartbeat failed:", (e as Error).message);
+  }
+}
+
 async function main() {
   await initOrca();
   const only = process.argv.slice(2);
@@ -280,6 +298,7 @@ async function main() {
           r.log("tick failed:", (e as Error).message);
         }
       }
+      await heartbeat(runners.map((r) => r.agent.toBase58()));
     }
     await new Promise((res) => setTimeout(res, POLL_MS));
   }

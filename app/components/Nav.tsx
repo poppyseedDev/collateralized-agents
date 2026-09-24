@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import dynamic from "next/dynamic";
 import { CLUSTER, WAITLIST_URL } from "@/lib/program";
-import { LocalFaucet } from "./LocalFaucet";
+import { Faucet } from "./Faucet";
+import { AgentsOnline } from "./AgentsOnline";
 import { IconAgents, IconBook, IconConsole, IconDrop, IconPositions, Logo } from "./Icons";
 
 const LABELS = {
@@ -40,7 +41,10 @@ const sections = [
   },
   {
     title: "Learn",
-    links: [{ href: "/how-it-works", label: "How it works", short: "Learn", Icon: IconBook }],
+    links: [
+      { href: "/start", label: "Start testing", short: "Start", Icon: IconDrop },
+      { href: "/how-it-works", label: "How it works", short: "Learn", Icon: IconBook },
+    ],
   },
 ];
 /** Sidebar-only extras that don't need a bottom tab. */
@@ -110,7 +114,8 @@ export function TopBar() {
           <span className="dot" />
           <span className="cluster-name">{CLUSTER}</span>
         </span>
-        <LocalFaucet />
+        <AgentsOnline />
+        <Faucet />
         <WalletButton />
       </div>
     </header>

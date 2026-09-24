@@ -10,7 +10,8 @@ export function DevnetNotice() {
       <span className="dot" />
       <span>
         <b>{CLUSTER === "localnet" ? "Local test network" : "Devnet"}.</b> Test SOL and test-pool prices only.
-        Returns shown here are not real results.
+        Returns shown here are not real results.{" "}
+        {CLUSTER === "devnet" && <a href="/start" className="box-link" style={{ color: "var(--amber)" }}>New here? Start testing →</a>}
       </span>
     </div>
   );

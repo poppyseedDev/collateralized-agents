@@ -98,6 +98,9 @@ input, select, textarea { font: inherit; color: inherit; }
   font-size: 12px; font-weight: 500; text-transform: capitalize;
 }
 .cluster-pill.localnet .dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.cluster-pill.online { color: var(--lime); background: var(--lime-soft); }
+.cluster-pill.offline { color: var(--red); background: var(--red-soft); }
+.cluster-pill.offline .dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
 
 /* wallet adapter */
 .wallet-adapter-button-trigger {
@@ -365,7 +368,7 @@ input[type="number"]::-webkit-inner-spin-button { opacity: 0.4; }
 
   .bottom-nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-    display: grid; grid-template-columns: repeat(4, 1fr);
+    display: grid; grid-template-columns: repeat(5, 1fr);
     padding: 6px 12px calc(6px + env(safe-area-inset-bottom));
     background: rgba(9, 13, 16, 0.86);
     backdrop-filter: blur(16px);
@@ -662,3 +665,11 @@ select { cursor: pointer; }
   .steps-row li:last-child { border-bottom: 0; }
   .guard { padding: 16px; }
 }
+
+/* start page */
+.checklist-steps { display: grid; gap: 14px; }
+.cstep { display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start; }
+.cstep .n { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--lime-soft); color: var(--lime); font-weight: 700; font-size: 13px; }
+.cstep b { display: block; margin: 3px 0 4px; }
+.cstep p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.faucet.wide .faucet-label { display: inline; }
