@@ -28,6 +28,14 @@ impl AgentTerms {
         collateral_ratio_bps / FEE_CAP_DIVISOR
     }
 
+    /// Collateral ratio plus tolerated drawdown may not exceed 100% of principal.
+    /// Above that, `settle_position(returned = 0)` would slash
+    /// `principal - principal * max_drawdown`, which is less than the locked
+    /// bond, so walking away would be cheaper than a default.
+    pub fn ratio_and_drawdown_fit(collateral_ratio_bps: u16, max_drawdown_bps: u16) -> bool {
+        (collateral_ratio_bps as u32) + (max_drawdown_bps as u32) <= BPS_DENOMINATOR as u32
+    }
+
     pub fn validate(&self) -> Result<()> {
         require!(
             (MIN_COLLATERAL_RATIO_BPS..=MAX_COLLATERAL_RATIO_BPS).contains(&self.collateral_ratio_bps),
@@ -38,6 +46,10 @@ impl AgentTerms {
             ErrorCode::FeeTooHigh
         );
         require!(self.max_drawdown_bps <= MAX_DRAWDOWN_BPS, ErrorCode::InvalidDrawdown);
+        require!(
+            Self::ratio_and_drawdown_fit(self.collateral_ratio_bps, self.max_drawdown_bps),
+            ErrorCode::RatioPlusDrawdownTooHigh
+        );
         require!(
             self.min_duration_secs >= MIN_POSITION_DURATION
                 && self.max_duration_secs <= MAX_POSITION_DURATION
@@ -97,9 +109,12 @@ pub struct Agent {
     /// Principal currently under management.
     pub capital_managed: u64,
     pub open_positions: u32,
+    /// Positions the agent drew and later settled (on time or late). Positions
+    /// declined before a draw are not counted.
     pub settled_positions: u32,
     pub defaulted_positions: u32,
-    /// Positions that ended with collateral paid to the trader.
+    /// Positions that ended in a breach: a drawdown beyond tolerance, a late
+    /// settle, or a claimed default.
     pub breach_count: u32,
     pub slashed_total: u64,
     pub fees_earned: u64,
@@ -127,7 +142,10 @@ pub enum PositionStatus {
     Open,
     /// The agent drew the principal and is trading with it.
     Trading,
-    /// The agent returned funds and the position was settled.
+    /// The position was settled by the agent's trading key. If `drawn_at` is 0
+    /// the agent declined it (never drew the funds) and the trader got the
+    /// principal back; otherwise the agent returned funds. `breach` is
+    /// `MissedDeadline` when the settle came at or after the deadline.
     Settled,
     /// The agent missed the deadline; collateral was paid to the trader.
     Defaulted,
@@ -140,7 +158,8 @@ pub enum Breach {
     None,
     /// Returned less than the principal minus the tolerated drawdown.
     Drawdown,
-    /// Did not settle before the deadline.
+    /// Did not settle before the deadline: either the trader claimed the bond
+    /// (`Defaulted`) or the agent settled late (`Settled`).
     MissedDeadline,
 }
 

@@ -4,7 +4,7 @@ use crate::{
     constants::*,
     error::ErrorCode,
     events::PositionOpened,
-    state::{Agent, AgentStatus, Breach, Position, PositionStatus},
+    state::{Agent, AgentStatus, AgentTerms, Breach, Position, PositionStatus},
 };
 
 #[derive(Accounts)]
@@ -59,6 +59,16 @@ pub fn handle_open_position(
     require!(
         (agent.terms.min_duration_secs..=agent.terms.max_duration_secs).contains(&duration_secs),
         ErrorCode::InvalidDuration
+    );
+
+    // Agents published before the ratio + drawdown bound existed may carry
+    // terms that no longer validate. Refuse to snapshot them into a position.
+    require!(
+        AgentTerms::ratio_and_drawdown_fit(
+            agent.terms.collateral_ratio_bps,
+            agent.terms.max_drawdown_bps
+        ),
+        ErrorCode::RatioPlusDrawdownTooHigh
     );
 
     // Lock the agent's guarantee for this position. If the agent cannot

@@ -3,12 +3,16 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::*,
     error::ErrorCode,
+    events::FundsDrawn,
     state::{Agent, Position, PositionStatus},
 };
 
 /// The agent's trading key pulls the trader's principal out of the position
 /// vault to trade with it. From this moment the reserved collateral is at
 /// risk: the agent must settle before the deadline or the trader claims it.
+///
+/// While the position is Open, this races the trader's `cancel_position`:
+/// whichever transaction lands first wins. There is no grace period.
 #[derive(Accounts)]
 pub struct DrawFunds<'info> {
     /// The bound trading key or the operator. Receives the principal.
@@ -53,5 +57,15 @@ pub fn handle_draw_funds(ctx: Context<DrawFunds>) -> Result<()> {
         &ctx.accounts.system_program.to_account_info(),
         seeds,
         position.principal,
-    )
+    )?;
+
+    emit!(FundsDrawn {
+        position: position_key,
+        agent: ctx.accounts.agent.key(),
+        trader: position.trader,
+        executor: ctx.accounts.executor.key(),
+        principal: position.principal,
+        deadline: position.deadline,
+    });
+    Ok(())
 }

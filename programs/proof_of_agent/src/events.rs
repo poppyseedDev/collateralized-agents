@@ -50,7 +50,42 @@ pub struct PositionClosed {
     pub returned: u64,
     pub slashed: u64,
     pub fee_paid: u64,
+    /// Lamports paid to the trader for this position: returned principal
+    /// minus fee plus any slash (settle), the principal (cancel or decline),
+    /// or the slashed bond (default). Excludes the position vault's rent
+    /// floor, which is also refunded to the trader when the vault is drained.
     pub trader_payout: u64,
+}
+
+/// The agent declined a position it never drew: the trader got the principal
+/// back and the agent's reputation counters were not changed. Emitted
+/// alongside `PositionClosed` (status `Settled`, breach `None`) so indexers can
+/// tell a decline apart from a settle that returned exactly the principal.
+#[event]
+pub struct PositionDeclined {
+    pub position: Pubkey,
+    pub agent: Pubkey,
+    pub trader: Pubkey,
+    pub principal: u64,
+}
+
+/// The agent's trading key drew a position's principal to trade with it.
+#[event]
+pub struct FundsDrawn {
+    pub position: Pubkey,
+    pub agent: Pubkey,
+    pub trader: Pubkey,
+    pub executor: Pubkey,
+    pub principal: u64,
+    pub deadline: i64,
+}
+
+/// The operator paused or resumed new positions on a published agent.
+#[event]
+pub struct AcceptingChanged {
+    pub agent: Pubkey,
+    pub operator: Pubkey,
+    pub accepting: bool,
 }
 
 #[event]

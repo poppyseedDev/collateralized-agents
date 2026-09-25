@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::*,
     error::ErrorCode,
-    events::{BreachRecorded, PositionClosed},
+    events::{BreachRecorded, PositionClosed, PositionDeclined},
     state::{Agent, Breach, Position, PositionStatus},
 };
 
@@ -13,6 +13,12 @@ use crate::{
 ///   * loss within max_drawdown -> tolerated trading loss, no fee, no slash
 ///   * loss beyond max_drawdown -> breach: the shortfall is paid to the trader
 ///     from the agent's reserved collateral (up to the guarantee)
+///   * settled at or after the deadline -> the payout is computed the same way
+///     but the position is recorded as a `MissedDeadline` breach. Because terms
+///     enforce ratio + max_drawdown <= 100%, settling late with `returned = 0`
+///     costs the whole locked bond, the same as `claim_default`.
+///   * position still Open (never drawn) -> decline: the principal goes back
+///     to the trader and no reputation counter changes.
 #[derive(Accounts)]
 pub struct SettlePosition<'info> {
     /// The bound trading key or the operator. Sends the returned SOL.
@@ -97,6 +103,10 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
         ErrorCode::InvalidStatus
     );
 
+    let now = Clock::get()?.unix_timestamp;
+    let declined = position.status == PositionStatus::Open;
+    let late = !declined && now >= position.deadline;
+
     let sys = ctx.accounts.system_program.to_account_info();
     let position_key = position.key();
     let position_seeds: &[&[u8]] =
@@ -104,7 +114,7 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
 
     // If the agent never drew the funds, the principal is still in the vault
     // and counts as "returned in full" without the agent sending anything.
-    let effective_returned = if position.status == PositionStatus::Open {
+    let effective_returned = if declined {
         position.principal
     } else {
         super::transfer_from_signer(
@@ -165,13 +175,22 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
     agent.locked_collateral -= position.locked_collateral;
     agent.capital_managed -= position.principal;
     agent.open_positions -= 1;
-    agent.settled_positions += 1;
+    // A decline is not a track record: only drawn positions count as settled.
+    if !declined {
+        agent.settled_positions += 1;
+    }
     agent.fees_earned = agent
         .fees_earned
         .checked_add(s.fee)
         .ok_or(ErrorCode::Overflow)?;
 
-    let breach = if s.slash > 0 { Breach::Drawdown } else { Breach::None };
+    let breach = if late {
+        Breach::MissedDeadline
+    } else if s.slash > 0 {
+        Breach::Drawdown
+    } else {
+        Breach::None
+    };
     if breach != Breach::None {
         agent.breach_count += 1;
         emit!(BreachRecorded {
@@ -187,7 +206,16 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
     position.returned = effective_returned;
     position.slashed = s.slash;
     position.fee_paid = s.fee;
-    position.closed_at = Clock::get()?.unix_timestamp;
+    position.closed_at = now;
+
+    if declined {
+        emit!(PositionDeclined {
+            position: position_key,
+            agent: agent.key(),
+            trader: position.trader,
+            principal: position.principal,
+        });
+    }
 
     emit!(PositionClosed {
         position: position_key,

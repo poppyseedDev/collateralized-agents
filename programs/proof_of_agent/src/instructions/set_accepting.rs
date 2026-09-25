@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 use crate::{
     constants::*,
     error::ErrorCode,
+    events::AcceptingChanged,
     state::{Agent, AgentStatus},
 };
 
@@ -23,5 +24,10 @@ pub fn handle_set_accepting(ctx: Context<SetAccepting>, accepting: bool) -> Resu
     let agent = &mut ctx.accounts.agent;
     require!(agent.is_published(), ErrorCode::NotPublished);
     agent.status = if accepting { AgentStatus::Active } else { AgentStatus::Paused };
+    emit!(AcceptingChanged {
+        agent: agent.key(),
+        operator: agent.operator,
+        accepting,
+    });
     Ok(())
 }

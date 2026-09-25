@@ -14,11 +14,11 @@ as such.
 | Principal | SOL the trader deposited into the position. | `Position.principal` |
 | Collateral ratio | Share of the principal the agent must lock as a guarantee. 10% to 100%. | `Agent.terms.collateral_ratio_bps` |
 | Locked bond | `principal × collateral ratio`, rounded up. Reserved from the agent's collateral vault for this position only. | `Position.locked_collateral` |
-| Tolerance | How much worse than holding SOL the agent may do before its bond pays the trader. Called *max drawdown* in the code. Up to 50%. | `Agent.terms.max_drawdown_bps` |
+| Tolerance | How much worse than holding SOL the agent may do before its bond pays the trader. Called *max drawdown* in the code. Up to 50%, and collateral ratio + tolerance may not exceed 100%. | `Agent.terms.max_drawdown_bps` |
 | Returned | SOL the agent sends back when it settles. | `Position.returned` |
 | Performance fee | Share of profit paid to the operator. Chosen by the operator, capped at half the collateral ratio. | `Agent.terms.fee_bps` |
 | Trading window | Shortest and longest deadline a trader may choose. | `Agent.terms.min_duration_secs`, `max_duration_secs` |
-| Breach | A settlement below the floor, or a missed deadline. | `Position.breach`, `Agent.breach_count` |
+| Breach | A settlement below the floor, a settlement at or after the deadline, or a claimed default. | `Position.breach`, `Agent.breach_count` |
 
 The position snapshots the fee and tolerance when it opens. Published terms
 cannot change in any case.
@@ -29,6 +29,12 @@ An agent is created as a **draft**. While it is a draft, the operator can edit
 its name, description and every term: collateral ratio, fee, maximum drawdown,
 trading window, allowed assets (up to eight mints) and plain-language rules
 (up to 512 characters, stored on-chain). Traders cannot allocate to a draft.
+
+`create_agent`, `update_agent` and `publish_agent` all validate the terms. On
+top of the per-field limits, the collateral ratio plus the tolerance may not
+exceed 100% (error `RatioPlusDrawdownTooHigh`). `open_position` checks the same
+bound against the agent's stored terms, so an agent published before the check
+existed cannot open new positions with terms that break it.
 
 `publish_agent` requires a collateral deposit, validates the terms again, and
 moves the agent to **active**. From then on the terms are permanent. The
@@ -53,6 +59,16 @@ fee   = profit × fee_bps          only when returned > principal
 - **Loss beyond the bond.** Anything below `floor − locked_bond` is the trader's loss. A higher collateral ratio shrinks this gap, which is why it earns a higher fee.
 
 In every case the locked bond is released back to the agent's free collateral, minus any slash.
+
+### Why ratio + tolerance may not exceed 100%
+
+If the agent returns nothing, the shortfall below the floor is
+`principal × (1 − tolerance)`. That has to be at least the locked bond, or
+settling with `returned = 0` would cost the agent less than letting the trader
+claim the default. With `ratio + tolerance ≤ 100%` it always is: the bond is
+rounded up and the tolerated loss is rounded down, so `settle(0)` slashes the
+whole locked bond, exactly what `claim_default` takes. A 100% ratio therefore
+requires a 0% tolerance.
 
 ### Why market drops are not slashed
 
@@ -87,10 +103,23 @@ The trader also gets back the position vault's rent deposit (about
 |------|--------|-----|-----------|--------|
 | — | `open_position` | Trader | Agent is active, deadline inside the published window, enough free collateral | Principal moves into the position vault. Bond is reserved. |
 | Open | `draw_funds` | Trading key or operator | Before the deadline | Principal moves to the trading key. Status becomes Trading. |
-| Open | `cancel_position` | Trader | Any time | Full refund. Bond released. No fee. |
-| Open | `settle_position` | Trading key or operator | Any time | Treated as returning the full principal, so no fee and no slash. Used to decline a position. |
-| Trading | `settle_position` | Trading key or operator | No deadline check | The rule above applies to the SOL sent. A slash records a drawdown breach. |
-| Trading | `claim_default` | Trader | At or after the deadline | The whole locked bond goes to the trader. Status becomes Defaulted and a missed-deadline breach is recorded. |
+| Open | `cancel_position` | Trader | While still Open, before or after the deadline | Full refund. Bond released. No fee. Only `open_positions` goes down. |
+| Open | `settle_position` | Trading key or operator | While still Open, before or after the deadline | Declines the position. Treated as returning the full principal, so no fee and no slash. The position is marked Settled with `drawn_at = 0`, `settled_positions` is **not** incremented, and a `PositionDeclined` event is emitted alongside `PositionClosed`. |
+| Trading | `settle_position` | Trading key or operator | Until the trader claims the default | The rule above applies to the SOL sent. Before the deadline, a slash records a drawdown breach. At or after the deadline, a missed-deadline breach is recorded instead (see below). `settled_positions` is incremented. |
+| Trading | `claim_default` | Trader | At or after the deadline | The whole locked bond goes to the trader. Status becomes Defaulted and a missed-deadline breach is recorded. `defaulted_positions` is incremented. |
+
+Deadlines are exact to the second: `draw_funds` works while
+`now < deadline`, and `claim_default` works once `now >= deadline`.
+
+### Cancel is first come, first served
+
+A trader can cancel only while the position is Open. The trading key can draw
+at any moment while the position is Open and before the deadline. There is no
+grace period and no ordering between the two: if the agent's `draw_funds`
+lands before the trader's `cancel_position`, the cancel fails with
+`InvalidStatus` and the position is now Trading. An agent can therefore
+front-run a cancel it sees pending. A trader who wants out after a draw has to
+wait for the agent to settle or for the deadline to claim the default.
 
 ### Missed deadline
 
@@ -98,16 +127,24 @@ While a position is Trading, the agent holds the principal. If it has not
 settled by the deadline, the trader can call `claim_default` and receive the
 entire locked bond, whatever the market did.
 
-Settlement itself has no deadline check. An agent that is late can still
-settle normally until the trader claims the default. Whichever transaction
-lands first decides the outcome.
+An agent that is late can still call `settle_position` until the trader
+claims the default. Whichever transaction lands first decides the outcome.
+A late settle pays out by the same rule as an on-time one (fee on profit,
+slash below the floor), but it is not a clean settle: the position records a
+`MissedDeadline` breach, `breach_count` goes up by one, and a `BreachRecorded`
+event is emitted. Because ratio + tolerance ≤ 100%, a late settle that returns
+nothing still costs the whole locked bond, so settling late is never cheaper
+for the agent than a default.
 
 ### What the bond does not cover
 
 In the current version the agent takes custody of the principal. If an agent
-never returns it, the trader recovers only the locked bond, so the trader's
-maximum loss is `principal − locked_bond`. A 100% collateral ratio makes a
-position fully backed.
+never returns it, the trader recovers only the locked bond. The same holds if
+the agent settles with nothing returned, because the ratio + tolerance bound
+guarantees that slash equals the whole bond. So on every path the trader's
+maximum loss is `principal − locked_bond` (plus nothing else: no fee is
+charged on a loss). A 100% collateral ratio, which forces a 0% tolerance,
+makes a position fully backed.
 
 ## Planned extensions
 

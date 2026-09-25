@@ -48,4 +48,6 @@ pub enum ErrorCode {
     NoCollateral,
     #[msg("Signer is neither the agent's operator nor its bound trading key")]
     UnauthorizedExecutor,
+    #[msg("Collateral ratio plus max drawdown must not exceed 100% of principal")]
+    RatioPlusDrawdownTooHigh,
 }

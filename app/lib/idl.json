@@ -1235,6 +1235,19 @@
   ],
   "events": [
     {
+      "name": "AcceptingChanged",
+      "discriminator": [
+        119,
+        126,
+        66,
+        81,
+        87,
+        231,
+        225,
+        2
+      ]
+    },
+    {
       "name": "AgentCreated",
       "discriminator": [
         237,
@@ -1300,6 +1313,19 @@
       ]
     },
     {
+      "name": "FundsDrawn",
+      "discriminator": [
+        188,
+        128,
+        5,
+        3,
+        185,
+        33,
+        51,
+        105
+      ]
+    },
+    {
       "name": "PositionClosed",
       "discriminator": [
         157,
@@ -1310,6 +1336,19 @@
         97,
         138,
         121
+      ]
+    },
+    {
+      "name": "PositionDeclined",
+      "discriminator": [
+        190,
+        231,
+        243,
+        45,
+        161,
+        145,
+        122,
+        118
       ]
     },
     {
@@ -1441,9 +1480,37 @@
       "code": 6022,
       "name": "UnauthorizedExecutor",
       "msg": "Signer is neither the agent's operator nor its bound trading key"
+    },
+    {
+      "code": 6023,
+      "name": "RatioPlusDrawdownTooHigh",
+      "msg": "Collateral ratio plus max drawdown must not exceed 100% of principal"
     }
   ],
   "types": [
+    {
+      "name": "AcceptingChanged",
+      "docs": [
+        "The operator paused or resumed new positions on a published agent."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "accepting",
+            "type": "bool"
+          }
+        ]
+      }
+    },
     {
       "name": "Agent",
       "docs": [
@@ -1532,6 +1599,10 @@
           },
           {
             "name": "settled_positions",
+            "docs": [
+              "Positions the agent drew and later settled (on time or late). Positions",
+              "declined before a draw are not counted."
+            ],
             "type": "u32"
           },
           {
@@ -1541,7 +1612,8 @@
           {
             "name": "breach_count",
             "docs": [
-              "Positions that ended with collateral paid to the trader."
+              "Positions that ended in a breach: a drawdown beyond tolerance, a late",
+              "settle, or a claimed default."
             ],
             "type": "u32"
           },
@@ -1771,6 +1843,41 @@
       }
     },
     {
+      "name": "FundsDrawn",
+      "docs": [
+        "The agent's trading key drew a position's principal to trade with it."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "trader",
+            "type": "pubkey"
+          },
+          {
+            "name": "executor",
+            "type": "pubkey"
+          },
+          {
+            "name": "principal",
+            "type": "u64"
+          },
+          {
+            "name": "deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Position",
       "docs": [
         "A trader's capital allocation to an agent, backed by reserved collateral."
@@ -1914,6 +2021,42 @@
           },
           {
             "name": "trader_payout",
+            "docs": [
+              "Lamports paid to the trader for this position: returned principal",
+              "minus fee plus any slash (settle), the principal (cancel or decline),",
+              "or the slashed bond (default). Excludes the position vault's rent",
+              "floor, which is also refunded to the trader when the vault is drained."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PositionDeclined",
+      "docs": [
+        "The agent declined a position it never drew: the trader got the principal",
+        "back and the agent's reputation counters were not changed. Emitted",
+        "alongside `PositionClosed` (status `Settled`, breach `None`) so indexers can",
+        "tell a decline apart from a settle that returned exactly the principal."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "trader",
+            "type": "pubkey"
+          },
+          {
+            "name": "principal",
             "type": "u64"
           }
         ]

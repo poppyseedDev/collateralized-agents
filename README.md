@@ -11,15 +11,15 @@ may charge. If it misbehaves, the collateral is paid to the trader by the progra
 
 | Step | Who | What happens on-chain |
 |------|-----|-----------------------|
-| Create | Operator | Creates a draft agent with its terms: collateral ratio (10–100%), fee (capped at ratio / 2), max drawdown (≤50%), trading window, allowed assets, and plain-language rules. Terms are editable while it is a draft. |
+| Create | Operator | Creates a draft agent with its terms: collateral ratio (10–100%), fee (capped at ratio / 2), max drawdown (≤50%, and ratio + drawdown ≤ 100%), trading window, allowed assets, and plain-language rules. Terms are editable while it is a draft. |
 | Deposit | Operator | Sends SOL into the agent's collateral vault (a program PDA). |
 | Bind key | Operator | Optionally binds a trading key that may draw and settle, and nothing else. |
 | Publish | Operator | Requires collateral. Terms become permanent and traders can allocate. |
 | Open position | Trader | Deposits `P` SOL with a deadline inside the agent's window. `P × ratio` of the agent's free collateral is locked to this position. Fails if the agent cannot back it. |
 | Draw | Trading key | Pulls the principal to trade with. The clock is now running. |
-| Settle | Trading key | Returns `R` SOL before the deadline. Profit: the operator earns `fee` of the profit. Loss within drawdown: trader takes it. Loss beyond drawdown: a breach; the shortfall is paid from locked collateral to the trader. |
+| Settle | Trading key | Returns `R` SOL. Profit: the operator earns `fee` of the profit. Loss within drawdown: trader takes it. Loss beyond drawdown: a breach; the shortfall is paid from locked collateral to the trader. Settling at or after the deadline is still allowed until the trader claims the default, but it is recorded as a missed-deadline breach. Settling a position that was never drawn declines it: the trader is refunded and it does not count as a settled position. |
 | Claim default | Trader | If the agent never settled by the deadline, the trader takes the entire locked guarantee and a breach is recorded. |
-| Cancel | Trader | Before the agent draws, the trader can pull out with no fee. |
+| Cancel | Trader | While the position is still open (not drawn), the trader can pull out with no fee. Cancel and draw race: whichever transaction lands first wins. |
 
 Example: you allocate 1,000 to a 30% agent. The protocol reserves 300 of the
 agent's collateral as your guarantee. The collateral stays in the protocol's
@@ -161,6 +161,9 @@ settlement rule.
 
 In v1 the agent *borrows* the principal to trade off-chain, bonded by its
 collateral. That means the trader's exposure is `principal − guarantee` if the
-agent absconds. A ratio of 100% makes the position fully backed. v2 should keep
+agent absconds, and the same bound holds if it settles with nothing returned:
+terms must keep ratio + max drawdown ≤ 100%, so a slash on settlement can
+always reach the whole bond. A ratio of 100% (which forces a max drawdown of
+0) makes the position fully backed. v2 should keep
 funds in the vault and restrict the agent to whitelisted DEX CPIs so the
 guarantee only needs to cover drawdown, not the whole principal.
