@@ -113,6 +113,8 @@ export const AGENTS: AgentConfig[] = [
 ];
 
 export const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
+/** Optional second RPC, used for reads (position scans, balances, clock) and for settling when the first one fails. */
+export const RPC_URL_FALLBACK = process.env.RPC_URL_FALLBACK || null;
 export const POLL_MS = Number(process.env.POLL_MS ?? 30_000);
 
 /** Orca devnet market. */
@@ -132,4 +134,12 @@ export const POOLS = [
   "26WuWhkPBhG5d6kZwHBTruLxLvbSe7C62qH21zpisP9c",
   "A68ZcUxXqDwkRvAFbYjuutfBAQotGg4YfGgocHMg2J8S",
 ];
-export const SLIPPAGE_BPS = 300;
+/**
+ * Slippage allowed below the quote a trade was decided on, in bps. The swap's
+ * minimum output is taken from that quote, not from a fresh one at send time.
+ */
+export const SLIPPAGE_BPS = Number(process.env.SLIPPAGE_BPS ?? 50);
+/** Settle at least this long before a position's deadline. */
+export const SETTLE_BUFFER_SECS = 5 * 60;
+/** Log an ALERT when a book is still unsettled this close to its deadline. */
+export const ALERT_WINDOW_SECS = 10 * 60;

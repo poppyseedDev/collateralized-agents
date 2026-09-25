@@ -8,11 +8,11 @@ pools.
 
 ## What each agent does
 
-1. **Draws** every new position on its agent, as long as the deadline is at least three minutes away.
+1. **Draws** every new position on its agent, as long as the deadline is at least seven minutes away.
 2. **Trades** the position with its strategy, keeping a separate book of the SOL and USDC that belong to each position.
 3. **Settles** before the deadline: sells any USDC back to SOL and returns the position's SOL through the program, so the usual fee and slash rules apply.
 
-A position settles at whichever comes first: the agent's hold time after drawing, or a buffer of one to five minutes before the deadline.
+A position settles at whichever comes first: the agent's hold time after drawing, or five minutes before the deadline. Deadline decisions use the cluster's clock (block time of the latest slot, read once per tick), falling back to the local clock if it cannot be read. Unwinding USDC at settlement uses the main pool only.
 
 Terms and rules published for each agent are in `src/config.ts`.
 
@@ -50,7 +50,10 @@ Environment variables:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `RPC_URL` | `https://api.devnet.solana.com` | Cluster RPC. A private devnet RPC avoids rate limits. |
+| `RPC_URL_FALLBACK` | none | Second RPC for reads (position scans, balances, clock, swap status) and for retrying a settle when the first RPC is unreachable. |
+| `SLIPPAGE_BPS` | `50` | How far below the quote a trade was decided on its output may fall. |
 | `POLL_MS` | `30000` | Time between ticks. |
+| `STATE_DIR` | `state/` | Where books are kept. |
 | `FUNDER_KEYPAIR` | `~/.config/solana/id.json` | Wallet that funds agents and the test trader. |
 
 Keys are written to `keys/` (`<id>.json` is the operator, `<id>-executor.json`
@@ -64,5 +67,8 @@ re-adopted on the next start.
 - The runner has to stay online. If it is down past a position's deadline, the trader can claim the agent's collateral.
 - The public devnet RPC rate-limits bursts. The runner retries, but a private RPC is more reliable.
 - Pool addresses are listed in `src/config.ts` to avoid a program-wide scan. Pools that lose liquidity are skipped.
-- If a swap lands but its confirmation times out, the book misses that trade. The runner logs the error; check the agent's wallet against its books if that happens.
+- Every swap is signed and saved in the book as `pending` (signature and last valid block height) before it is sent. If its confirmation is lost, the next tick looks it up and books what actually happened, or drops it once its blockhash has expired. A swap still unresolved two minutes before the deadline is settled with the book as it stands, and logged as an `ALERT`.
+- Each agent's positions are read with a scan filtered on that agent. If the scan fails, the runner fetches the positions already in its books by address so they still settle, but it does not draw new ones until the scan works again. The heartbeat lists only agents whose tick ran.
+- A book still unsettled within ten minutes of its deadline, when it should already have settled or its tick could not run, is logged as an `ALERT` line on every tick. There is no other notification channel yet.
+- State files are written atomically, keeping the previous version as `<id>.json.bak`. A file that does not parse is moved to `<id>.json.corrupt-<time>` and the backup is loaded.
 - The momentum signal reads the main pool's price, which only moves when someone trades it. On devnet it often stays flat, so the momentum agent may never trade.

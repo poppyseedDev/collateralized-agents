@@ -6,10 +6,9 @@
  * Leaves the agent on-chain, paused, so the breach records stay visible on the site.
  *   npm run bad-operator
  */
-import { BN } from "@coral-xyz/anchor";
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { SOL_MINT, USDC_MINT } from "./config.js";
-import { agentPda, agentVaultPda, connection, positionPda, positionVaultPda, programFor, sys } from "./chain.js";
+import { BN, agentPda, agentVaultPda, connection, positionPda, positionVaultPda, programFor, sys } from "./chain.js";
 import { agentKeys, funderKey, keyFor } from "./keys.js";
 
 const L = (sol: number) => Math.round(sol * LAMPORTS_PER_SOL);

@@ -13,13 +13,14 @@ import { sqrtPriceToPrice } from "@orca-so/whirlpools-core";
 import {
   ComputeBudgetProgram,
   PublicKey,
+  SendTransactionError,
   Transaction,
   TransactionInstruction,
-  sendAndConfirmTransaction,
   type Keypair,
 } from "@solana/web3.js";
+import { utils } from "@coral-xyz/anchor";
 import { AccountRole, type Instruction } from "@solana/kit";
-import { connection } from "./chain.js";
+import { connection, withFallback } from "./chain.js";
 import { MAIN_POOL, POOLS, RPC_URL, SLIPPAGE_BPS, SOL_MINT, USDC_MINT } from "./config.js";
 
 const deployment = WhirlpoolDeployment.devnet;
@@ -96,16 +97,22 @@ export async function mainPrice(): Promise<number> {
   return main.price;
 }
 
-type Quote = { pool: string; out: bigint };
+/** A priced swap: `out` is the estimate, `minOut` the least the swap may return (estimate less SLIPPAGE_BPS). */
+export type Quote = { pool: string; mintIn: "SOL" | "USDC"; amountIn: bigint; out: bigint; minOut: bigint };
 
-async function quote(pool: string, mintIn: "SOL" | "USDC", amountIn: bigint, signer: KeyPairSigner): Promise<Quote> {
-  const { quote } = await withRetry(() => swapInstructions(
-    rpc,
-    { inputAmount: amountIn, mint: mintIn === "SOL" ? SOL : USDC },
-    address(pool),
-    { slippageToleranceBps: SLIPPAGE_BPS, signer, whirlpoolDeployment: deployment },
-  ));
-  return { pool, out: quote.tokenEstOut };
+const build = (pool: string, mintIn: "SOL" | "USDC", amountIn: bigint, signer: KeyPairSigner, slippageBps: number) =>
+  withRetry(() =>
+    swapInstructions(
+      rpc,
+      { inputAmount: amountIn, mint: mintIn === "SOL" ? SOL : USDC },
+      address(pool),
+      { slippageToleranceBps: slippageBps, signer, whirlpoolDeployment: deployment },
+    ),
+  );
+
+export async function quote(pool: string, mintIn: "SOL" | "USDC", amountIn: bigint, signer: KeyPairSigner): Promise<Quote> {
+  const { quote: q } = await build(pool, mintIn, amountIn, signer, SLIPPAGE_BPS);
+  return { pool, mintIn, amountIn, out: q.tokenEstOut, minOut: q.tokenMinOut };
 }
 
 /** Best pool to sell `amountIn` of `mintIn`, by estimated output. */
@@ -129,58 +136,134 @@ export async function bestQuote(mintIn: "SOL" | "USDC", amountIn: bigint, signer
 
 export type SwapResult = { signature: string; solDelta: bigint; usdcDelta: bigint };
 
-async function usdcBalance(owner: string): Promise<bigint> {
-  const res = await withRetry(() =>
-    rpc.getTokenAccountsByOwner(address(owner), { mint: USDC }, { encoding: "jsonParsed" }).send(),
-  );
-  return res.value.reduce(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (n, a: any) => n + BigInt(a.account.data.parsed.info.tokenAmount.amount),
-    0n,
-  );
+/** The swap is signed and about to be sent; persist this before sending so a lost confirmation can be recovered. */
+export type Signed = { signature: string; lastValidBlockHeight: number };
+
+/** Thrown when a signed swap may still land: keep it pending and resolve it on a later tick. */
+export class SwapInFlight extends Error {}
+
+type Meta = {
+  fee: number;
+  preBalances: number[];
+  postBalances: number[];
+  preTokenBalances?: { owner?: string; mint: string; uiTokenAmount: { amount: string } }[] | null;
+  postTokenBalances?: { owner?: string; mint: string; uiTokenAmount: { amount: string } }[] | null;
+};
+
+/**
+ * Balance changes of a landed swap, from its transaction meta.
+ * Selling SOL is booked as exactly `-amountIn`, so one-time account rent is not
+ * charged to a position. Buying SOL is measured on-chain, excluding the network fee.
+ * USDC is measured from the owner's token balances before and after.
+ */
+function deltasFromMeta(meta: Meta, owner: string, mintIn: "SOL" | "USDC", amountIn: bigint) {
+  const usdcOf = (bs: Meta["preTokenBalances"]) =>
+    (bs ?? []).filter((b) => b.owner === owner && b.mint === USDC_MINT).reduce((n, b) => n + BigInt(b.uiTokenAmount.amount), 0n);
+  const usdcDelta = usdcOf(meta.postTokenBalances) - usdcOf(meta.preTokenBalances);
+  const solDelta = mintIn === "SOL" ? -amountIn : BigInt(meta.postBalances[0] - meta.preBalances[0] + meta.fee);
+  return { solDelta, usdcDelta };
+}
+
+/** Meta of a landed transaction, retried briefly because RPC nodes index it with a small delay. Null if not found. */
+async function fetchMeta(signature: string): Promise<{ meta: Meta; err: unknown } | null> {
+  for (let i = 0; i < 10; i++) {
+    const info = await withFallback("getTransaction", (c) =>
+      c.getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 }),
+    );
+    if (info?.meta) return { meta: info.meta as Meta, err: info.meta.err };
+    await sleep(1500);
+  }
+  return null;
 }
 
 /**
- * Executes an exact-in swap and returns the balance changes.
- * Selling SOL is booked as exactly `-amountIn`, so one-time account rent is not
- * charged to a position. Buying SOL is measured on-chain, excluding the network fee.
- * Sent through web3.js, which retries rate-limited requests before they reach the cluster.
+ * Executes an exact-in swap on `pool` and returns the balance changes.
+ *
+ * The on-chain minimum output is at least `minOut` (from the quote the decision was
+ * based on); without it, the fresh quote's own minimum is used. The transaction is
+ * signed first and `onSigned` is awaited before it is sent, so the caller can record
+ * it. If the outcome is unknown when this returns (send or confirmation failed, or the
+ * landed transaction's meta is not available), it throws `SwapInFlight`; resolve it
+ * later with `resolveSwap`. Any other error means nothing was sent.
  */
 export async function swapExactIn(
   pool: string,
   mintIn: "SOL" | "USDC",
   amountIn: bigint,
   signer: KeyPairSigner,
+  onSigned: (s: Signed) => void | Promise<void>,
+  minOut?: bigint,
 ): Promise<SwapResult> {
-  const { instructions } = await withRetry(() =>
-    swapInstructions(
-      rpc,
-      { inputAmount: amountIn, mint: mintIn === "SOL" ? SOL : USDC },
-      address(pool),
-      { slippageToleranceBps: SLIPPAGE_BPS, signer, whirlpoolDeployment: deployment },
-    ),
-  );
-  const payer = keypairs.get(signer.address);
-  if (!payer) throw new Error("unknown signer; create it with signerFor()");
-  const tx = new Transaction()
-    .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }))
-    .add(...instructions.map(toWeb3));
-
-  const usdcBefore = await usdcBalance(signer.address);
-  const signature = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: "confirmed" });
-  const usdcAfter = await usdcBalance(signer.address);
-
-  let solDelta = -amountIn;
-  if (mintIn === "USDC") {
-    solDelta = 0n;
-    for (let i = 0; i < 10; i++) {
-      const info = await connection.getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-      if (info?.meta) {
-        solDelta = BigInt(info.meta.postBalances[0] - info.meta.preBalances[0] + info.meta.fee);
-        break;
-      }
-      await sleep(1500);
+  let built = await build(pool, mintIn, amountIn, signer, SLIPPAGE_BPS);
+  if (minOut !== undefined && built.quote.tokenMinOut < minOut) {
+    const est = built.quote.tokenEstOut;
+    if (est < minOut) {
+      throw new Error(`price moved: pool quotes ${est} now, below the minimum ${minOut} from the evaluated quote`);
+    }
+    // Tighten slippage so the on-chain threshold is still at least minOut.
+    const bps = Number(((est - minOut) * 10_000n) / est);
+    built = await build(pool, mintIn, amountIn, signer, bps);
+    if (built.quote.tokenMinOut < minOut) {
+      throw new Error(`price moved: minimum output ${built.quote.tokenMinOut} is below ${minOut} from the evaluated quote`);
     }
   }
-  return { signature, solDelta, usdcDelta: usdcAfter - usdcBefore };
+  const payer = keypairs.get(signer.address);
+  if (!payer) throw new Error("unknown signer; create it with signerFor()");
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  const tx = new Transaction({ feePayer: payer.publicKey, blockhash, lastValidBlockHeight })
+    .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }))
+    .add(...built.instructions.map(toWeb3));
+  tx.sign(payer);
+  const signature = utils.bytes.bs58.encode(tx.signature!);
+  await onSigned({ signature, lastValidBlockHeight });
+
+  try {
+    await connection.sendRawTransaction(tx.serialize(), { preflightCommitment: "confirmed", maxRetries: 5 });
+  } catch (e) {
+    // The RPC answered with an error (e.g. preflight failed), so it did not forward the transaction.
+    if (e instanceof SendTransactionError) throw new SwapRejected((e as Error).message);
+    throw new SwapInFlight(`send failed, outcome unknown: ${(e as Error).message}`);
+  }
+  try {
+    const res = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+    if (res.value.err) throw new SwapRejected(`swap ${signature} failed on-chain: ${JSON.stringify(res.value.err)}`);
+  } catch (e) {
+    if (e instanceof SwapRejected) throw e;
+    throw new SwapInFlight(`confirmation failed, outcome unknown: ${(e as Error).message}`);
+  }
+  const got = await fetchMeta(signature);
+  if (!got) throw new SwapInFlight(`swap ${signature} confirmed but its transaction meta is not available yet`);
+  return { signature, ...deltasFromMeta(got.meta, signer.address, mintIn, amountIn) };
+}
+
+/** The swap did not and cannot land: clear it and book nothing. */
+export class SwapRejected extends Error {}
+
+export type Resolution =
+  | { state: "landed"; result: SwapResult }
+  | { state: "failed"; reason: string }
+  | { state: "pending"; reason: string };
+
+/** Works out what happened to a swap that was signed on an earlier tick. */
+export async function resolveSwap(
+  p: { sig: string; lastValidBlockHeight: number; side: "SOL" | "USDC"; in: string },
+  owner: string,
+): Promise<Resolution> {
+  const st = await withFallback("getSignatureStatuses", (c) =>
+    c.getSignatureStatuses([p.sig], { searchTransactionHistory: true }),
+  );
+  const s = st.value[0];
+  if (s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized")) {
+    if (s.err) return { state: "failed", reason: `failed on-chain: ${JSON.stringify(s.err)}` };
+    const got = await fetchMeta(p.sig);
+    if (!got) return { state: "pending", reason: "landed, transaction meta not available yet" };
+    return { state: "landed", result: { signature: p.sig, ...deltasFromMeta(got.meta, owner, p.side, BigInt(p.in)) } };
+  }
+  if (s) return { state: "pending", reason: `status ${s.confirmationStatus ?? "processed"}` };
+  const height = await withFallback("getBlockHeight", (c) => c.getBlockHeight("confirmed"));
+  if (height <= p.lastValidBlockHeight) return { state: "pending", reason: `not seen yet; blockhash valid for ${p.lastValidBlockHeight - height} more blocks` };
+  // Expired: it can no longer land. Check once more that it did not land in the meantime.
+  const got = await fetchMeta(p.sig).catch(() => null);
+  if (got && !got.err) return { state: "landed", result: { signature: p.sig, ...deltasFromMeta(got.meta, owner, p.side, BigInt(p.in)) } };
+  return { state: "failed", reason: "blockhash expired without the swap landing" };
 }

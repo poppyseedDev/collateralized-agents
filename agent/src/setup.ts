@@ -5,10 +5,9 @@
  * Safe to re-run: every step is skipped once done.
  *   npm run setup
  */
-import { BN } from "@coral-xyz/anchor";
 import { LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { AGENTS, SOL_MINT, USDC_MINT } from "./config.js";
-import { agentPda, agentVaultPda, connection, programFor, sys } from "./chain.js";
+import { BN, agentPda, agentVaultPda, connection, programFor, sys } from "./chain.js";
 import { agentKeys, funderKey } from "./keys.js";
 
 const L = (sol: number) => Math.round(sol * LAMPORTS_PER_SOL);

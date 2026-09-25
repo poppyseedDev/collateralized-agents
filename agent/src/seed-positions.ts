@@ -3,10 +3,9 @@
  * to trade and build a track record.
  *   npm run seed-positions -- [solPerPosition=0.2] [positionsPerAgent=1] [durationSecs=3600]
  */
-import { BN } from "@coral-xyz/anchor";
 import { LAMPORTS_PER_SOL, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { AGENTS } from "./config.js";
-import { agentPda, connection, positionPda, positionVaultPda, programFor, sys } from "./chain.js";
+import { BN, agentPda, connection, positionPda, positionVaultPda, programFor, sys } from "./chain.js";
 import { agentKeys, funderKey, keyFor } from "./keys.js";
 
 async function main() {
