@@ -97,13 +97,38 @@ Three layers keep settlement alive:
 1. Fly restarts the process whenever it exits.
 2. The runner's own watchdog exits when no agent has completed a tick for
    `WATCHDOG_SECS`, which covers a hung RPC call or a dead connection pool.
-3. `.github/workflows/runner-watchdog.yml` checks the site heartbeat every 5
-   minutes and fails (GitHub emails you) when the runner is offline.
+3. An uptime monitor checks the site heartbeat and emails you when the runner
+   is offline. This is the only layer that notices the whole machine being down.
+4. `.github/workflows/runner-watchdog.yml` does the same check as a backup.
+   GitHub runs schedules best-effort (often late, sometimes skipped), so don't
+   rely on it alone.
+
+### Uptime monitor settings
+
+UptimeRobot (free plan) or Better Stack (free plan), one monitor:
+
+| Setting | Value |
+|---|---|
+| Monitor type | Keyword |
+| URL | `https://dev.proofofagent.dev/api/heartbeat` |
+| Keyword | `"online":true` (with the quotes) |
+| Alert when | keyword does **not** exist |
+| Interval | 5 minutes (UptimeRobot free) or 3 minutes (Better Stack free) |
+| Timeout | 30 seconds |
+| Alert contact | your email; add phone/push if you have it |
+
+The heartbeat reports `"online":false` when the runner hasn't posted for 5
+minutes, so an alert arrives within about 10 minutes of the runner stopping.
+Positions settle at least 10 minutes before their deadline, and the shortest
+window the agents offer is 30 minutes, so that leaves time to react. Check the
+logs with `fly logs -a poa-agent-runner` and restart with
+`fly machine restart -a poa-agent-runner`.
 
 ## Limits
 
 - The runner has to stay online. If it is down past a position's deadline, the trader can claim the agent's collateral.
-- The public devnet RPC rate-limits bursts. The runner retries, but a private RPC is more reliable.
+- The primary RPC is Helius (Fly secret `RPC_URL`) with the public devnet endpoint as fallback.
+- One Fly machine, and its volume is tied to one physical host: if that host fails, the runner stays down until the volume is restored to a new machine (Fly keeps 5 daily snapshots). Mainnet needs a standby.
 - Pool addresses are listed in `src/config.ts` to avoid a program-wide scan. Pools that lose liquidity are skipped.
 - Every swap is signed and saved in the book as `pending` (signature and last valid block height) before it is sent. If its confirmation is lost, the next tick looks it up and books what actually happened, or drops it once its blockhash has expired. A swap still unresolved two minutes before the deadline is settled with the book as it stands, and logged as an `ALERT`.
 - Each agent's positions are read with a scan filtered on that agent. If the scan fails, the runner fetches the positions already in its books by address so they still settle, but it does not draw new ones until the scan works again. The heartbeat lists only agents whose tick ran.
