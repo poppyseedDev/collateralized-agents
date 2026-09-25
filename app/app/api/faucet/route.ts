@@ -137,8 +137,9 @@ async function drip(req: Request): Promise<Response> {
 
   let address: PublicKey;
   try {
-    const body = (await req.json()) as { address?: string };
-    address = new PublicKey(body.address ?? "");
+    const body = (await req.json()) as { address?: unknown };
+    // Strings only: PublicKey also accepts numbers and byte arrays, which would pay an arbitrary key.
+    address = new PublicKey(typeof body.address === "string" ? body.address : "");
   } catch {
     return json({ error: "Send a valid Solana address." }, 400);
   }

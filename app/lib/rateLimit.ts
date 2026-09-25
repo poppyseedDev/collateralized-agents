@@ -21,8 +21,9 @@ export function rateLimiter({ windowMs, max, maxKeys = 5_000 }: { windowMs: numb
   return function limited(key: string): boolean {
     const now = Date.now();
     if (now - lastSweep > windowMs || hits.size >= maxKeys) sweep(now);
-    // Still full after the sweep: drop the oldest keys (Map keeps insertion order).
-    while (hits.size >= maxKeys) {
+    // Still full after the sweep and `key` is new: drop the oldest keys (Map keeps insertion order).
+    // A key that is already tracked doesn't grow the map, so it never forces an eviction.
+    while (hits.size >= maxKeys && !hits.has(key)) {
       const oldest = hits.keys().next().value;
       if (oldest === undefined) break;
       hits.delete(oldest);
@@ -35,4 +36,6 @@ export function rateLimiter({ windowMs, max, maxKeys = 5_000 }: { windowMs: numb
   };
 }
 
-export const clientIp = (req: Request) => req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+/** The client's IP: the first x-forwarded-for entry, else x-real-ip, else "unknown". */
+export const clientIp = (req: Request) =>
+  req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip")?.trim() || "unknown";

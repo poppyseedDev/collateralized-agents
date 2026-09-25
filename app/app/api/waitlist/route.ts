@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   let body: unknown;
   try {
     const text = await req.text();
-    if (text.length > MAX_BODY_BYTES) return Response.json({ error: "Submission is too large." }, { status: 413 });
+    if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) return Response.json({ error: "Submission is too large." }, { status: 413 });
     body = JSON.parse(text);
   } catch {
     return Response.json({ error: "Invalid request." }, { status: 400 });

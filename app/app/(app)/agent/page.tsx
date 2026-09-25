@@ -19,11 +19,7 @@ import {
   toLamports,
 } from "@/lib/program";
 
-/** Lamports as a plain decimal string for an input field, rounded down so "max" never exceeds the real amount. */
-const lamportsToInput = (lamports: number, digits = 3) => {
-  const step = LAMPORTS_PER_SOL / 10 ** digits;
-  return (Math.floor(lamports / step) / 10 ** digits).toFixed(digits);
-};
+import { lamportsToInput, parseSolInput } from "@/lib/amounts";
 import { TxNotice } from "@/components/TxNotice";
 import { Avatar } from "@/components/Avatar";
 import { AgentForm, AgentDraft, DEFAULT_DRAFT, draftProblems } from "@/components/operator/AgentForm";
@@ -260,7 +256,7 @@ function Overview({ agent, me, actions, busy, done }: { agent: AgentAccount; me:
   const balance = useBalance(me, actions.tx);
   const maxDeposit = balance === null ? 0 : Math.max(0, balance - 0.01 * 1e9);
   const [key, setKey] = useState("");
-  const lamports = toLamports(parseFloat(amt) || 0);
+  const lamports = parseSolInput(amt);
   const keyValid = (() => {
     try {
       return key.length > 30 && !!new PublicKey(key);

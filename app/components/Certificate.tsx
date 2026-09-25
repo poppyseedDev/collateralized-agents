@@ -13,8 +13,8 @@ import {
   pct,
   requiredCollateral,
   sol,
-  toLamports,
 } from "@/lib/program";
+import { lamportsToInput, parseSolInput } from "@/lib/amounts";
 import { Avatar } from "./Avatar";
 import { IconArrowDown, IconShield } from "./Icons";
 import { Faucet } from "./Faucet";
@@ -95,8 +95,7 @@ export function Certificate({
 
   const durations = durationsFor(agent);
   const duration = durations.some((d) => d.secs === picked) ? picked! : durations[Math.min(1, durations.length - 1)].secs;
-  const value = parseFloat(amount);
-  const lamports = toLamports(Number.isFinite(value) ? value : 0);
+  const lamports = parseSolInput(amount);
   const guaranteed = requiredCollateral(lamports, agent.terms.collateralRatioBps);
   const cap = capacity(agent);
   const overCap = lamports > cap;
@@ -127,7 +126,7 @@ export function Certificate({
           {balance !== null && (
             <span className="box-balance">
               Balance {sol(balance)} SOL
-              <button type="button" className="max-btn" onClick={() => setAmount((Math.floor(maxLamports / 1e6) / 1e3).toFixed(3))}>Max</button>
+              <button type="button" className="max-btn" onClick={() => setAmount(lamportsToInput(maxLamports))}>Max</button>
             </span>
           )}
         </div>

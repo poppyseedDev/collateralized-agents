@@ -227,8 +227,7 @@ export const short = (k: PublicKey | string) => {
   const s = k.toString();
   return s.slice(0, 4) + "…" + s.slice(-4);
 };
-export const toLamports = (solAmount: number) =>
-  Math.round(solAmount * LAMPORTS_PER_SOL);
+export { toLamports } from "./amounts";
 export const explorer = (sig: string) =>
   CLUSTER === "localnet"
     ? `https://explorer.solana.com/tx/${sig}?cluster=custom&customUrl=${encodeURIComponent(RPC_URL)}`
