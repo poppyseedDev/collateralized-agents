@@ -8,6 +8,7 @@ import {
   AgentAccount,
   assetLabel,
   capacity,
+  feePct,
   fmtDuration,
   freeCollateral,
   pct,
@@ -179,7 +180,7 @@ export function Certificate({
         </div>
         <div className="cert-row">
           <span className="k">Performance fee</span>
-          <span className="v seal">{pct(agent.terms.feeBps)} of profit</span>
+          <span className="v seal">{feePct(agent.terms.feeBps)} of profit</span>
         </div>
         <div className="cert-row">
           <span className="k">Loss tolerance</span>

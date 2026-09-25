@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useAnchorWallet, useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
-import { fetchProgramAccounts } from "./accounts";
+import { fetchProgramAccounts, noteConfirmedSlot } from "./accounts";
 import { u64 } from "./amounts";
 import {
   AgentAccount,
@@ -119,6 +119,9 @@ export function useActions() {
       setTx({ kind: "pending", label });
       try {
         const sig = await fn();
+        // The slot it confirmed in, so the refresh that follows doesn't show a snapshot from before it.
+        const status = await connection.getSignatureStatus(sig).catch(() => null);
+        if (status?.value?.slot) noteConfirmedSlot(status.value.slot);
         setTx({ kind: "ok", sig, label });
         return sig;
       } catch (e) {
@@ -127,7 +130,7 @@ export function useActions() {
         throw e;
       }
     },
-    [],
+    [connection],
   );
 
   const need = () => {

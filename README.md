@@ -116,11 +116,16 @@ restarts on crash).
 
 The one-pager at proofofagent.dev (`app/(landing)`) collects retail sign-ups. Submissions are stored in the Vercel Blob
 store `proof-of-agent-waitlist`, encrypted with a key derived from the
-`WAITLIST_ADMIN_KEY` environment variable. Export them as CSV:
+`WAITLIST_ADMIN_KEY` environment variable. Export them as CSV, sending the key in a header
+(a `?key=` query parameter is not accepted, so the key never ends up in URL logs):
 
 ```
-https://proofofagent.dev/api/waitlist?key=<WAITLIST_ADMIN_KEY>
+curl -H "Authorization: Bearer <WAITLIST_ADMIN_KEY>" https://proofofagent.dev/api/waitlist
 ```
+
+Emails aren't verified, so the first submission for an email is kept as its row. A later submission
+from the same email is stored beside it, never over it, and the `laterSubmissions` column lists what it
+changed, for a human to accept or ignore.
 
 The key is set on Vercel, in `app/.env.local`, and in the macOS Keychain
 (account `proofofagent`, service `WAITLIST_ADMIN_KEY`). Anyone with it can read
@@ -132,7 +137,7 @@ Backups:
 - **Daily snapshot on Vercel.** A cron job (`vercel.json`, 03:00 UTC) calls
   `/api/waitlist/backup`, which writes every entry into one encrypted file
   under `waitlist-snapshots/`. Recover from the newest one with
-  `/api/waitlist?key=…&snapshot=latest`.
+  `/api/waitlist?snapshot=latest` (same header).
 - **Daily copy on the Mac.** `app/scripts/waitlist-backup.sh` is installed to
   `~/Library/Application Support/ProofOfAgent/` and run by the launchd job
   `dev.proofofagent.waitlist-backup` at 10:00. It keeps the newest 90 CSVs in

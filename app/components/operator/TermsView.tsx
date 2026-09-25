@@ -1,4 +1,4 @@
-import { AgentAccount, BPS, assetLabel, fmtDuration, maxCapacity, pct, sol } from "@/lib/program";
+import { AgentAccount, BPS, assetLabel, feePct, fmtDuration, maxCapacity, pct, sol } from "@/lib/program";
 
 /** Read-only summary of an agent's terms, as traders see them. */
 export function TermsView({ agent }: { agent: AgentAccount }) {
@@ -6,7 +6,7 @@ export function TermsView({ agent }: { agent: AgentAccount }) {
   return (
     <div className="details">
       <div className="cert-row"><span className="k">Collateral ratio</span><span className="v">{pct(t.collateralRatioBps)}</span></div>
-      <div className="cert-row"><span className="k">Performance fee</span><span className="v seal">{pct(t.feeBps, 1)} of profit</span></div>
+      <div className="cert-row"><span className="k">Performance fee</span><span className="v seal">{feePct(t.feeBps)} of profit</span></div>
       <div className="cert-row"><span className="k">Maximum drawdown</span><span className="v">{pct(t.maxDrawdownBps)}</span></div>
       <div className="cert-row">
         <span className="k">Trading window</span>

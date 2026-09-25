@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAgents, useActions, usePositions } from "@/lib/useProtocol";
-import { PositionAccount, pct, short, sol } from "@/lib/program";
+import { PositionAccount, feePct, pct, short, sol } from "@/lib/program";
 import { TxNotice } from "@/components/TxNotice";
 import { Avatar } from "@/components/Avatar";
 import { IconRefresh } from "@/components/Icons";
@@ -134,7 +134,7 @@ export default function Positions() {
                   <td className="num">{sol(p.principal, 3)} SOL</td>
                   <td className="num cy">
                     {sol(p.lockedCollateral, 3)} SOL
-                    <div className="tiny">fee {pct(p.feeBps)} · tolerance {pct(p.maxDrawdownBps)}</div>
+                    <div className="tiny">fee {feePct(p.feeBps)} · tolerance {pct(p.maxDrawdownBps)}</div>
                   </td>
                   <td className="num hide-sm">
                     {p.status === "settled" || p.status === "defaulted" ? (

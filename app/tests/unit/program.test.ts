@@ -9,6 +9,7 @@ import {
   agentVaultPda,
   fmtDuration,
   maxFeeForRatio,
+  feePct,
   pct,
   positionPda,
   positionVaultPda,
@@ -121,6 +122,17 @@ describe("pct()", () => {
       assert.equal(pct(1, 2), "0.01%");
     });
     withLocale("de-DE", () => assert.equal(pct(1_250, 1), "12,5%"));
+  });
+});
+
+describe("feePct()", () => {
+  it("shows the half-percent steps fees move in, without a trailing .0", () => {
+    withLocale("en-US", () => {
+      assert.equal(feePct(1_550), "15.5%");
+      assert.equal(feePct(1_500), "15%");
+      assert.equal(feePct(50), "0.5%");
+      assert.equal(feePct(0), "0%");
+    });
   });
 });
 

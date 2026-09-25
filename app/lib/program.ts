@@ -223,6 +223,8 @@ export const sol = (lamports: BN | number, digits = 2) =>
   });
 export const pct = (bps: number, digits = 0) =>
   (bps / 100).toLocaleString(undefined, { maximumFractionDigits: digits }) + "%";
+/** Fees move in 50 bps steps, so they get one decimal when needed: "15%", "15.5%". */
+export const feePct = (bps: number) => pct(bps, 1);
 export const short = (k: PublicKey | string) => {
   const s = k.toString();
   return s.slice(0, 4) + "…" + s.slice(-4);

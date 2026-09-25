@@ -1,5 +1,5 @@
 import { del, head, list, put } from "@vercel/blob";
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SendTransactionError, SystemProgram, Transaction } from "@solana/web3.js";
 import { clientIp, rateLimiter } from "@/lib/rateLimit";
 
 /**
@@ -90,6 +90,15 @@ async function countToday(): Promise<number> {
   return n;
 }
 
+/**
+ * True when sendRawTransaction failed because the RPC answered with an error (preflight simulation
+ * failed, blockhash not found, bad signature, ...): the node refused the transaction and didn't forward it.
+ * A timeout, dropped connection or HTTP error is ambiguous; the transaction may have gone out.
+ */
+function sendRejected(e: unknown): boolean {
+  return e instanceof SendTransactionError;
+}
+
 /** Creates `pathname` only if it doesn't exist yet. Returns false if it was already there. */
 async function claim(pathname: string, body: string): Promise<boolean> {
   try {
@@ -104,22 +113,33 @@ async function claim(pathname: string, body: string): Promise<boolean> {
 
 // ---------- routes ----------
 
+/** The status costs a Blob list and an RPC call, so it's shared for STATUS_TTL_MS per instance and at the edge. */
+const STATUS_TTL_MS = 30_000;
+type Status = { enabled: true; amountSol: number; remainingDrops: number };
+let status: { at: number; body: Status } | null = null;
+
 export async function GET() {
+  if (status && Date.now() - status.at < STATUS_TTL_MS) return statusResponse(status.body);
   try {
     const kp = faucetKeypair();
     if (!kp || !storageConfigured() || !(await onDevnet())) return json({ enabled: false });
     const balance = await new Connection(RPC, "confirmed").getBalance(kp.publicKey);
     const leftToday = Math.max(0, MAX_DROPS_PER_DAY - (await countToday()));
-    return json({
+    const body: Status = {
       enabled: true,
       amountSol: AMOUNT / LAMPORTS_PER_SOL,
       remainingDrops: Math.min(leftToday, Math.max(0, Math.floor((balance - RESERVE) / AMOUNT))),
-    });
+    };
+    status = { at: Date.now(), body };
+    return statusResponse(body);
   } catch (e) {
     console.error("[faucet] status check failed:", e);
-    return json({ enabled: false });
+    return json({ enabled: false }); // not cached, so a passing RPC hiccup doesn't hide the faucet for long
   }
 }
+
+const statusResponse = (body: Status) =>
+  Response.json(body, { headers: { "Cache-Control": `public, s-maxage=${STATUS_TTL_MS / 1000}` } });
 
 export async function POST(req: Request) {
   try {
@@ -170,15 +190,17 @@ async function drip(req: Request): Promise<Response> {
     return json({ error: "Today's faucet budget is used up. Try again tomorrow or use faucet.solana.com." }, 503);
   }
 
-  // Send. If the transaction never reached the network, release the claim so the wallet can retry.
-  // If it was sent but confirmation is uncertain, keep the claim: a double payout is worse than a retry.
+  // Send. If the transaction was definitely rejected, release the claim so the wallet can retry.
+  // If it may have reached the network, keep the claim: a double payout is worse than a retry.
   let sig: string;
+  let sending = false;
   try {
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
     const tx = new Transaction({ feePayer: kp.publicKey, blockhash, lastValidBlockHeight }).add(
       SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: address, lamports: AMOUNT }),
     );
     tx.sign(kp);
+    sending = true;
     sig = await connection.sendRawTransaction(tx.serialize());
     try {
       const res = await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
@@ -192,13 +214,18 @@ async function drip(req: Request): Promise<Response> {
       return json({ error: "Sent, but confirmation timed out. Check your balance in a minute.", sig }, 504);
     }
   } catch (e) {
-    await release();
-    console.error("[faucet] could not send transfer:", e);
-    return json({ error: "Could not send devnet SOL right now. Try again, or use faucet.solana.com." }, 502);
+    if (!sending || sendRejected(e)) {
+      await release();
+      console.error("[faucet] could not send transfer:", e);
+      return json({ error: "Could not send devnet SOL right now. Try again, or use faucet.solana.com." }, 502);
+    }
+    console.error("[faucet] send failed after it may have been broadcast; keeping the claim:", e);
+    return json({ error: "The transfer may have gone through. Check your balance in a minute." }, 504);
   }
 
   await put(walletMarker, JSON.stringify({ address: addr, sig, at: new Date().toISOString(), state: "sent" }), {
     access: "public", contentType: "application/json", addRandomSuffix: false, allowOverwrite: true,
   }).catch((e) => console.error("[faucet] could not record signature:", e));
+  status = null; // the next status check shows one drop fewer
   return json({ ok: true, sig, amountSol: AMOUNT / LAMPORTS_PER_SOL });
 }

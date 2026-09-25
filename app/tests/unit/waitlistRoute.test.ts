@@ -64,12 +64,12 @@ describe("GET /api/waitlist auth", () => {
     assert.equal((await get("", "Bearer ")).status, 404);
   });
 
-  it("accepts the bearer header or ?key=", async () => {
+  it("accepts the bearer header", async () => {
     assert.equal((await get("", `Bearer ${ADMIN}`)).status, 200);
-    assert.equal((await get(`?key=${ADMIN}`)).status, 200);
   });
 
-  it("prefers the header over ?key=", async () => {
+  it("no longer accepts ?key=, which would end up in URL logs", async () => {
+    assert.equal((await get(`?key=${ADMIN}`)).status, 404);
     assert.equal((await get(`?key=${ADMIN}`, "Bearer wrong")).status, 404, "a wrong header isn't rescued by a right key");
     assert.equal((await get("?key=wrong", `Bearer ${ADMIN}`)).status, 200);
   });
@@ -77,9 +77,7 @@ describe("GET /api/waitlist auth", () => {
   it("uses WAITLIST_EXPORT_TOKEN instead of the admin key when it is set", async () => {
     setEnv({ WAITLIST_EXPORT_TOKEN: EXPORT });
     assert.equal((await get("", `Bearer ${ADMIN}`)).status, 404);
-    assert.equal((await get(`?key=${ADMIN}`)).status, 404);
     assert.equal((await get("", `Bearer ${EXPORT}`)).status, 200);
-    assert.equal((await get(`?key=${EXPORT}`)).status, 200);
   });
 
   it("falls back to the admin key when WAITLIST_EXPORT_TOKEN is empty", async () => {
@@ -100,14 +98,14 @@ describe("GET /api/waitlist export", () => {
     assert.equal(res.headers.get("content-type"), "text/csv; charset=utf-8");
     assert.equal(res.headers.get("cache-control"), "no-store");
     assert.match(res.headers.get("content-disposition")!, /^attachment; filename="waitlist-\d{4}-\d{2}-\d{2}\.csv"$/);
-    assert.equal(lines[0], "submittedAt,name,email,telegram,location,wallet,tradesCrypto,usedAgents,wouldTrust,allocation,trustFactors,collateralHelps,testDevnet,notes,id");
+    assert.equal(lines[0], "submittedAt,name,email,telegram,location,wallet,tradesCrypto,usedAgents,wouldTrust,allocation,trustFactors,collateralHelps,testDevnet,notes,id,laterSubmissions");
     assert.equal(lines.length, 2);
     assert.ok(lines[1].startsWith(`"2026-01-01T00:00:00.000Z","Ada","ada@example.com"`));
   });
 
   it("defuses formula prefixes", async () => {
     const payloads = ["=SUM(A1:A9)", "+1+1", "-2+3", "@cmd", "\t=1", "\r=1"];
-    store.entries = payloads.map((notes, i) => row({ id: String(i), notes }));
+    store.entries = payloads.map((notes, i) => row({ id: String(i), email: `u${i}@example.com`, notes }));
     const { lines } = await exportCsv();
     // "\r" doesn't split lines; only "\n" does. Pull the notes cell (second to last) of each row.
     const body = lines.slice(1).join("\n");
@@ -139,13 +137,27 @@ describe("GET /api/waitlist export", () => {
     const { lines } = await exportCsv();
     assert.ok(lines[1].includes(`"Track record; Agent posts a bond"`));
     assert.ok(lines[1].includes(`"ada","","${WALLET}"`), "null location is empty");
-    assert.ok(lines[1].endsWith(`"","id-1"`), "undefined notes is empty");
+    assert.ok(lines[1].endsWith(`"","id-1",""`), "undefined notes is empty, and there are no later submissions");
   });
 
   it("defuses a formula smuggled in through an array", async () => {
     store.entries = [row({ trustFactors: ["=HYPERLINK(\"x\")"] as unknown as Stored["trustFactors"] })];
     const { lines } = await exportCsv();
     assert.ok(lines[1].includes(`"'=HYPERLINK(""x"")"`));
+  });
+
+  it("keeps the first submission per email and lists later changes instead of applying them", async () => {
+    store.entries = [
+      row(),
+      row({ id: "id-2", email: "ADA@example.com", submittedAt: "2026-01-02T00:00:00.000Z", wallet: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", telegram: "mallory" }),
+      row({ id: "id-3", submittedAt: "2026-01-03T00:00:00.000Z" }), // identical resubmission: not a conflict
+      row({ id: "b", email: "bob@example.com", name: "Bob", submittedAt: "2026-01-01T12:00:00.000Z" }),
+    ];
+    const { lines } = await exportCsv();
+    assert.equal(lines.length, 3, "one row per email");
+    assert.ok(lines[1].includes(`"ada","","${WALLET}"`), "the first wallet and telegram are kept");
+    assert.ok(lines[1].endsWith(`"id-1","2026-01-02T00:00:00.000Z: telegram=mallory; wallet=9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"`));
+    assert.ok(lines[2].endsWith(`"b",""`));
   });
 
   it("reads the latest snapshot with ?snapshot=latest", async () => {
@@ -170,6 +182,14 @@ describe("GET /api/waitlist export", () => {
 
 describe("POST /api/waitlist", () => {
   const good = { name: "Ada", email: "Ada@Example.com", telegram: "@ada", wallet: WALLET, wouldTrust: "Yes", allocation: "Not sure yet" };
+
+  it("answers a resubmission exactly like a first submission", async () => {
+    const first = await post(good);
+    const again = await post({ ...good, wallet: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin" });
+    assert.equal(first.status, again.status);
+    assert.deepEqual(await first.json(), await again.json());
+    assert.equal(store.saved.length, 2, "both are handed to the store, which keeps the first");
+  });
 
   it("stores a valid, normalized submission", async () => {
     const res = await post(good, nextIp(), { "user-agent": "u".repeat(400) });

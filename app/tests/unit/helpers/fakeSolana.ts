@@ -20,14 +20,19 @@ export const rpc = {
   balance: 10 * real.LAMPORTS_PER_SOL,
   failBalance: false,
   failBlockhash: false,
-  failSend: false,
+  /** "rejected": the RPC refused it (preflight). "timeout": the request failed after it may have gone out. */
+  failSend: null as null | "rejected" | "timeout",
   /** "ok", "err" (landed but failed on chain) or "timeout" (confirmation threw). */
   confirm: "ok" as "ok" | "err" | "timeout",
   sent: [] as import("@solana/web3.js").Transaction[],
+  /** Context slots returned by successive getProgramAccounts calls; the last one repeats. */
+  programSlots: [1] as number[],
+  programAccountCalls: 0,
   reset() {
     Object.assign(this, {
       urls: [], genesis: DEVNET_GENESIS, genesisCalls: 0, failGenesis: false, balance: 10 * real.LAMPORTS_PER_SOL,
-      failBalance: false, failBlockhash: false, failSend: false, confirm: "ok", sent: [],
+      failBalance: false, failBlockhash: false, failSend: null, confirm: "ok", sent: [],
+      programSlots: [1], programAccountCalls: 0,
     });
   },
 };
@@ -54,9 +59,25 @@ class FakeConnection {
   }
   async sendRawTransaction(raw: Buffer) {
     await tick();
-    if (rpc.failSend) throw new Error("send failed");
+    if (rpc.failSend === "rejected") {
+      throw new real.SendTransactionError({
+        action: "simulate",
+        signature: "",
+        transactionMessage: "Transaction simulation failed: Blockhash not found",
+        logs: [],
+      });
+    }
+    if (rpc.failSend === "timeout") {
+      rpc.sent.push(real.Transaction.from(raw)); // it reached the network; only the response was lost
+      throw new Error("fetch failed: request timed out");
+    }
     rpc.sent.push(real.Transaction.from(raw));
     return `sig${rpc.sent.length}`;
+  }
+  async getProgramAccounts() {
+    await tick();
+    const slot = rpc.programSlots[Math.min(rpc.programAccountCalls++, rpc.programSlots.length - 1)];
+    return { context: { slot }, value: [] };
   }
   async confirmTransaction() {
     await tick();

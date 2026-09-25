@@ -13,6 +13,7 @@ import {
   MAX_RULES_LEN,
   MIN_RATIO_BPS,
   assetLabel,
+  feePct,
   fmtDuration,
   maxFeeForRatio,
   pct,
@@ -44,6 +45,9 @@ Leverage: none
 Exit rule: 
 When I settle: `;
 
+/** UTF-8 length. The program limits name, description and rules in bytes, not characters. */
+export const byteLen = (s: string) => new TextEncoder().encode(s).length;
+
 /** The program requires collateral ratio + max drawdown <= 100% (`RatioPlusDrawdownTooHigh`). */
 export const maxDrawdownForRatio = (ratioBps: number) => Math.max(0, Math.min(MAX_DRAWDOWN_BPS, BPS - ratioBps));
 
@@ -51,6 +55,11 @@ export function draftProblems(d: AgentDraft): string[] {
   const t = d.terms;
   const out: string[] = [];
   if (!d.name.trim()) out.push("Give the agent a name.");
+  // Name and description are sent trimmed; rules as typed. maxLength counts UTF-16 units, so it can't catch
+  // multi-byte text (an emoji is 2 units but 4 bytes).
+  if (byteLen(d.name.trim()) > MAX_NAME_LEN) out.push(`Name is too long (max ${MAX_NAME_LEN} bytes).`);
+  if (byteLen(d.description.trim()) > MAX_DESCRIPTION_LEN) out.push(`Description is too long (max ${MAX_DESCRIPTION_LEN} bytes).`);
+  if (byteLen(t.rules) > MAX_RULES_LEN) out.push(`Trading rules are too long (max ${MAX_RULES_LEN} bytes).`);
   if (t.feeBps > maxFeeForRatio(t.collateralRatioBps)) out.push("Fee is above the cap for this collateral ratio.");
   if (t.collateralRatioBps + t.maxDrawdownBps > BPS) out.push("Collateral ratio plus maximum drawdown can't exceed 100%.");
   if (t.minDurationSecs > t.maxDurationSecs) out.push("Shortest deadline is longer than the longest.");
@@ -98,11 +107,13 @@ export function AgentForm({
           <label>Name</label>
           <input type="text" maxLength={MAX_NAME_LEN} value={value.name} placeholder="Orca Momentum"
             onChange={(e) => onChange({ ...value, name: e.target.value })} />
+          <span className="hint">{byteLen(value.name.trim())}/{MAX_NAME_LEN} bytes</span>
         </div>
         <div className="field">
           <label>Short description</label>
           <input type="text" maxLength={MAX_DESCRIPTION_LEN} value={value.description} placeholder="Rotates into USDC when SOL dips"
             onChange={(e) => onChange({ ...value, description: e.target.value })} />
+          <span className="hint">{byteLen(value.description.trim())}/{MAX_DESCRIPTION_LEN} bytes</span>
         </div>
       </section>
 
@@ -125,10 +136,10 @@ export function AgentForm({
           </span>
         </div>
         <div className="field">
-          <label>Performance fee · {pct(t.feeBps, 1)}</label>
+          <label>Performance fee · {feePct(t.feeBps)}</label>
           <input type="range" min={0} max={feeCap} step={50} value={Math.min(t.feeBps, feeCap)}
             onChange={(e) => setT({ feeBps: Number(e.target.value) })} />
-          <span className="hint">Charged on profit only. The cap is half the collateral ratio: {pct(feeCap)}.</span>
+          <span className="hint">Charged on profit only. The cap is half the collateral ratio: {feePct(feeCap)}.</span>
         </div>
       </section>
 
@@ -188,7 +199,7 @@ export function AgentForm({
           <textarea rows={7} maxLength={MAX_RULES_LEN} value={t.rules} placeholder={RULES_TEMPLATE}
             onChange={(e) => setT({ rules: e.target.value })} />
           <span className="hint">
-            Published on-chain with the agent and shown to every trader. {t.rules.length}/{MAX_RULES_LEN}
+            Published on-chain with the agent and shown to every trader. {byteLen(t.rules)}/{MAX_RULES_LEN} bytes
             {!t.rules && (
               <>
                 {" · "}

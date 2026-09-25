@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { PublicKey } from "@solana/web3.js";
 import { fetchProgramAccounts } from "@/lib/accounts";
 import { useActions } from "@/lib/useProtocol";
-import { AgentAccount, PositionAccount, capacity, pct, short, sol } from "@/lib/program";
+import { AgentAccount, PositionAccount, capacity, feePct, pct, short, sol } from "@/lib/program";
 import { Avatar } from "@/components/Avatar";
 import { Certificate } from "@/components/Certificate";
 import { TxNotice } from "@/components/TxNotice";
@@ -156,7 +156,7 @@ export default function AgentPage() {
               } catch {}
             }}
           />
-          <p className="tiny" style={{ marginTop: 10 }}>Fee {pct(agent.terms.feeBps, 1)} of profit · collateral {pct(agent.terms.collateralRatioBps)} of your deposit.</p>
+          <p className="tiny" style={{ marginTop: 10 }}>Fee {feePct(agent.terms.feeBps)} of profit · collateral {pct(agent.terms.collateralRatioBps)} of your deposit.</p>
         </div>
       </div>
     </>

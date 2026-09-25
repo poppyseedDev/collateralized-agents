@@ -3,12 +3,12 @@ import { blob } from "./helpers/fakeBlob";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EMPTY } from "@/lib/waitlist";
+import { describeUpdates, groupByEmail } from "@/lib/waitlistExport";
 import {
   BY_EMAIL_PREFIX,
   ENTRY_PREFIX,
   SNAPSHOT_PREFIX,
   decrypt,
-  dedupeByEmail,
   emailId,
   encrypt,
   loadEntries,
@@ -103,43 +103,82 @@ describe("storageConfigured", () => {
   });
 });
 
-describe("dedupeByEmail", () => {
-  it("keeps the latest entry per email, case- and whitespace-insensitively, oldest first", () => {
+describe("groupByEmail", () => {
+  it("keeps the first entry per email, case- and whitespace-insensitively, oldest first", () => {
     const rows = [
       entry("bob@example.com", "2026-01-03T00:00:00.000Z"),
-      entry("ada@example.com", "2026-01-01T00:00:00.000Z", { name: "old" }),
       entry(" ADA@example.com ", "2026-01-05T00:00:00.000Z", { name: "new" }),
+      entry("ada@example.com", "2026-01-01T00:00:00.000Z", { name: "first" }),
       entry("ada@example.com", "2026-01-02T00:00:00.000Z", { name: "middle" }),
     ];
-    const out = dedupeByEmail(rows);
-    assert.deepEqual(out.map((r) => [r.email.trim().toLowerCase(), r.name]), [
-      ["bob@example.com", "bob"],
-      ["ada@example.com", "new"],
+    const out = groupByEmail(rows);
+    assert.deepEqual(out.map((r) => [r.entry.email.trim().toLowerCase(), r.entry.name, r.updates.map((u) => u.name)]), [
+      ["ada@example.com", "first", ["middle", "new"]],
+      ["bob@example.com", "bob", []],
     ]);
   });
 
-  it("on equal timestamps, keeps the later row", () => {
-    const t = "2026-01-01T00:00:00.000Z";
-    const out = dedupeByEmail([entry("a@x.co", t, { name: "first" }), entry("a@x.co", t, { name: "second" })]);
-    assert.deepEqual(out.map((r) => r.name), ["second"]);
+  it("drops later submissions that change nothing, or repeat an earlier update", () => {
+    const a = entry("a@x.co", "2026-01-01T00:00:00.000Z", { wallet: "W1" });
+    const out = groupByEmail([
+      a,
+      { ...a, id: "again", submittedAt: "2026-01-02T00:00:00.000Z", email: "A@X.CO", userAgent: "other" },
+      entry("a@x.co", "2026-01-03T00:00:00.000Z", { wallet: "W2" }),
+      entry("a@x.co", "2026-01-04T00:00:00.000Z", { wallet: "W2" }),
+    ]);
+    assert.equal(out.length, 1);
+    assert.deepEqual(out[0].updates.map((u) => u.submittedAt), ["2026-01-03T00:00:00.000Z"]);
   });
 
   it("keeps rows without an email apart, by id", () => {
     const t = "2026-01-01T00:00:00.000Z";
-    const out = dedupeByEmail([entry("", t, { id: "1" }), entry("", t, { id: "2" }), { ...entry("", t, { id: "3" }), email: undefined as unknown as string }]);
+    const out = groupByEmail([entry("", t, { id: "1" }), entry("", t, { id: "2" }), { ...entry("", t, { id: "3" }), email: undefined as unknown as string }]);
     assert.equal(out.length, 3);
+  });
+
+  it("describes each update by the fields it changes, on one line", () => {
+    const [row] = groupByEmail([
+      entry("a@x.co", "2026-01-01T00:00:00.000Z", { wallet: "W1", telegram: "ada" }),
+      entry("a@x.co", "2026-01-02T00:00:00.000Z", { wallet: "W2", telegram: "ada" }),
+      entry("a@x.co", "2026-01-03T00:00:00.000Z", { wallet: "W1", telegram: "eve", notes: "line\nbreak", trustFactors: ["Track record", "Agent posts a bond"] }),
+    ]);
+    assert.equal(
+      describeUpdates(row),
+      "2026-01-02T00:00:00.000Z: wallet=W2 | 2026-01-03T00:00:00.000Z: telegram=eve; trustFactors=Track record, Agent posts a bond; notes=line break",
+    );
+    assert.equal(describeUpdates({ entry: row.entry, updates: [] }), "");
   });
 });
 
 describe("saveEntry", () => {
-  it("writes one encrypted file per email and overwrites on resubmission", async () => {
+  it("never overwrites the first entry for an email; later ones are stored beside it", async () => {
     await saveEntry(entry("ada@example.com", "2026-01-01T00:00:00.000Z", { name: "first" }));
     await saveEntry(entry("ADA@example.com", "2026-01-02T00:00:00.000Z", { name: "second" }));
-    const paths = [...blob.files.keys()];
-    assert.deepEqual(paths, [`${BY_EMAIL_PREFIX}${emailId("ada@example.com")}.enc`]);
-    const stored = blob.files.get(paths[0])!;
+    const first = `${BY_EMAIL_PREFIX}${emailId("ada@example.com")}.enc`;
+    const later = `${BY_EMAIL_PREFIX}${emailId("ada@example.com")}/2026-01-02T00-00-00-000Z-id-ADA@example.com-2026-01-02T00:00:00.000Z.enc`;
+    assert.deepEqual([...blob.files.keys()], [first, later]);
+    const stored = blob.files.get(first)!;
     assert.ok(!stored.includes("ada"), "contents are encrypted");
-    assert.equal(JSON.parse(decrypt(stored)).name, "second");
+    assert.equal(JSON.parse(decrypt(stored)).name, "first");
+    assert.equal(JSON.parse(decrypt(blob.files.get(later)!)).name, "second");
+  });
+
+  it("exports the first entry with the later one as an update, alongside older date-path entries", async () => {
+    blob.files.set(`${ENTRY_PREFIX}2025-12-01/old-x.enc`, encrypt(JSON.stringify(entry("old@example.com", "2025-12-01T00:00:00.000Z"))));
+    await saveEntry(entry("ada@example.com", "2026-01-01T00:00:00.000Z", { wallet: "W1" }));
+    await saveEntry(entry("ada@example.com", "2026-01-02T00:00:00.000Z", { wallet: "W2" }));
+    const rows = groupByEmail(await loadEntries());
+    assert.deepEqual(rows.map((r) => [r.entry.email, r.entry.wallet, r.updates.map((u) => u.wallet)]), [
+      ["old@example.com", "", []],
+      ["ada@example.com", "W1", ["W2"]],
+    ]);
+  });
+
+  it("rethrows a storage failure that isn't an existing entry", async () => {
+    blob.beforePut = () => {
+      throw new Error("blob down");
+    };
+    await assert.rejects(saveEntry(entry("ada@example.com", "2026-01-01T00:00:00.000Z")), /blob down/);
   });
 });
 

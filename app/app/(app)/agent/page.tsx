@@ -11,6 +11,7 @@ import {
   PositionAccount,
   agentPda,
   capacity,
+  feePct,
   freeCollateral,
   maxCapacity,
   pct,
@@ -383,7 +384,7 @@ function DraftTerms({ agent, actions, busy, done }: { agent: AgentAccount; actio
         </ul>
         <label className="ack">
           <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-          I have reviewed the terms: {pct(saved.terms.collateralRatioBps)} collateral, {pct(saved.terms.feeBps, 1)} fee,{" "}
+          I have reviewed the terms: {pct(saved.terms.collateralRatioBps)} collateral, {feePct(saved.terms.feeBps)} fee,{" "}
           {pct(saved.terms.maxDrawdownBps)} max drawdown. I understand they cannot be changed after publishing.
         </label>
         <button className="btn lg" disabled={busy || !ready}

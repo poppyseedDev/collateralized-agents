@@ -51,6 +51,33 @@ describe("POST /api/heartbeat auth", () => {
   });
 });
 
+describe("POST /api/heartbeat body", () => {
+  beforeEach(() => setEnv({ HEARTBEAT_SECRET: "hb-secret", BLOB_READ_WRITE_TOKEN: undefined }));
+  const beat = (body: unknown) => heartbeat.POST(req("POST", "Bearer hb-secret", body));
+
+  it("rejects wrong field types with 400 instead of throwing", async () => {
+    for (const body of [{ note: 42 }, { note: { x: 1 } }, { agents: "alpha" }, { agents: [1, 2] }, { agents: ["a", null] }, [], "text", 7]) {
+      const res = await beat(body);
+      assert.equal(res.status, 400, JSON.stringify(body));
+      assert.match((await res.json()).error, /array of strings/);
+    }
+  });
+
+  it("accepts a null or empty body as a beat with no agents", async () => {
+    for (const body of [null, {}]) {
+      assert.equal((await beat(body)).status, 200, JSON.stringify(body));
+      assert.deepEqual((await (await heartbeat.GET()).json()).agents, []);
+    }
+  });
+
+  it("accepts a string or missing note, and caps agents at 20", async () => {
+    assert.equal((await beat({ agents: ["a"], note: "degraded" })).status, 200);
+    assert.equal((await beat({ agents: ["a"], note: null })).status, 200);
+    assert.equal((await beat({ agents: Array.from({ length: 25 }, (_, i) => `a${i}`) })).status, 200);
+    assert.equal((await (await heartbeat.GET()).json()).agents.length, 20);
+  });
+});
+
 describe("GET /api/waitlist/backup auth", () => {
   beforeEach(() => setEnv({ CRON_SECRET: "cron-secret" }));
   const quiet = () => [mock.method(console, "error", () => {}), mock.method(console, "log", () => {})];

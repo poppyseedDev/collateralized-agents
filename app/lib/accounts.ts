@@ -22,9 +22,22 @@ export type ProgramSnapshot = {
 let last: ProgramSnapshot | null = null;
 let inflight: Promise<ProgramSnapshot> | null = null;
 const CLIENT_TTL_MS = 5_000;
+/** Slot of this browser's latest confirmed transaction; fresh loads ask the server for a snapshot at least this recent. */
+let minSlot = 0;
+
+/** Records the slot a transaction confirmed in, so the next fresh load includes it. */
+export function noteConfirmedSlot(slot: number) {
+  minSlot = Math.max(minSlot, slot);
+}
+
+/** The accounts route URL; a fresh load bypasses caches and, after a transaction, waits for its slot. */
+export function accountsUrl(fresh: boolean, now = Date.now()): string {
+  if (!fresh) return "/api/accounts";
+  return `/api/accounts?fresh=${now}${minSlot ? `&minSlot=${minSlot}` : ""}`;
+}
 
 async function load(fresh: boolean): Promise<ProgramSnapshot> {
-  const res = await fetch(fresh ? `/api/accounts?fresh=${Date.now()}` : "/api/accounts");
+  const res = await fetch(accountsUrl(fresh));
   const body = await res.json();
   if (!res.ok) throw new Error(body.error ?? `accounts request failed (${res.status})`);
   // Responses can arrive out of order, and edge caches can serve older copies.

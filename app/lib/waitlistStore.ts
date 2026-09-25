@@ -1,15 +1,16 @@
 import "server-only";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
-import { list, put } from "@vercel/blob";
+import { head, list, put } from "@vercel/blob";
 import type { Submission } from "./waitlist";
 
 /**
  * Server-side storage for waitlist entries: encrypted files in Vercel Blob, plus daily snapshots.
  *
  * Layout (all under the public store, contents AES-256-GCM encrypted):
- *   waitlist/<YYYY-MM-DD>/<uuid>-<suffix>.enc   entries written before email dedup (read-only now)
- *   waitlist/by-email/<hmac>.enc                one file per email; a resubmission overwrites it
- *   waitlist-snapshots/<stamp>-<suffix>.enc     daily snapshot of every entry
+ *   waitlist/<YYYY-MM-DD>/<uuid>-<suffix>.enc     entries written before email dedup (read-only now)
+ *   waitlist/by-email/<hmac>.enc                  the first submission per email; never overwritten
+ *   waitlist/by-email/<hmac>/<stamp>-<uuid>.enc   later submissions from the same email, kept apart
+ *   waitlist-snapshots/<stamp>-<suffix>.enc       daily snapshot of every entry
  *
  * The encryption key is derived from WAITLIST_ADMIN_KEY. Changing that variable makes every
  * existing entry and snapshot unreadable, so it must never be rotated. Rotate WAITLIST_EXPORT_TOKEN instead.
@@ -54,15 +55,24 @@ export function decrypt(b64: string): string {
 
 export const storageConfigured = () => !!process.env.BLOB_READ_WRITE_TOKEN && !!process.env.WAITLIST_ADMIN_KEY;
 
-/** Stores an entry under its email's id, replacing any earlier submission from the same email. */
+/**
+ * Stores an entry. The first submission per email is kept as is; emails are unverified, so a later
+ * one (possibly from someone else) goes beside it and the export shows it as an update.
+ */
 export async function saveEntry(stored: Stored) {
-  await put(`${BY_EMAIL_PREFIX}${emailId(stored.email)}.enc`, encrypt(JSON.stringify(stored)), {
-    access: "public", // the store is public; contents are encrypted and the path is unguessable
-    contentType: "text/plain",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    cacheControlMaxAge: 60, // the minimum; the file can change when the same email resubmits
-  });
+  const id = emailId(stored.email);
+  const body = encrypt(JSON.stringify(stored));
+  // The store is public; contents are encrypted and the path is unguessable.
+  const opts = { access: "public", contentType: "text/plain", addRandomSuffix: false, allowOverwrite: false } as const;
+  const first = `${BY_EMAIL_PREFIX}${id}.enc`;
+  try {
+    await put(first, body, opts);
+  } catch (e) {
+    // The put fails when the email already has an entry; any other failure is rethrown.
+    if (!(await head(first).catch(() => null))) throw e;
+    const stamp = stored.submittedAt.replace(/[:.]/g, "-");
+    await put(`${BY_EMAIL_PREFIX}${id}/${stamp}-${stored.id}.enc`, body, opts);
+  }
 }
 
 async function listAll(prefix: string) {
@@ -107,7 +117,7 @@ async function download(url: string, attempts = 3): Promise<string> {
 }
 
 /**
- * Every stored entry (old date-path files and per-email files), oldest first, not deduplicated.
+ * Every stored entry (old date-path files, first and later per-email files), oldest first, not grouped.
  * Throws if any file can't be downloaded, so a backup or export is never silently partial.
  * Files that download but don't decrypt are skipped with a warning.
  */
@@ -134,17 +144,6 @@ export async function loadEntries(): Promise<Stored[]> {
   }
   const rows = results.filter((r): r is Stored => r !== null);
   return rows.sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
-}
-
-/** One row per email (case-insensitive), keeping the latest submission, oldest first. */
-export function dedupeByEmail(rows: Stored[]): Stored[] {
-  const latest = new Map<string, Stored>();
-  for (const r of rows) {
-    const k = (r.email ?? "").trim().toLowerCase() || `id:${r.id}`;
-    const prev = latest.get(k);
-    if (!prev || prev.submittedAt <= r.submittedAt) latest.set(k, r);
-  }
-  return [...latest.values()].sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
 }
 
 /** Writes one encrypted file holding every stored entry (not deduplicated). Returns the entry count. */

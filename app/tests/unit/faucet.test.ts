@@ -62,7 +62,10 @@ beforeEach(() => {
     FAUCET_DAILY_CAP_SOL: "1", // 5 drops a day
   });
 });
-afterEach(() => mock.restoreAll());
+afterEach(() => {
+  mock.restoreAll();
+  mock.timers.reset();
+});
 
 describe("faucet cluster guard", () => {
   it("is enabled when the RPC reports the devnet genesis hash", async () => {
@@ -133,10 +136,43 @@ describe("faucet status", () => {
   it("reports drops left, limited by today's cap and by the balance above the reserve", async () => {
     fillDay(2);
     assert.equal((await (await route.GET()).json()).remainingDrops, 3);
+    load(); // drop the cached status
     rpc.balance = 0.5 * LAMPORTS_PER_SOL; // (0.5 - 0.05 reserve) / 0.2 = 2
     assert.equal((await (await route.GET()).json()).remainingDrops, 2);
+    load();
     rpc.balance = 0;
     assert.equal((await (await route.GET()).json()).remainingDrops, 0);
+  });
+
+  it("caches the status for 30 seconds, in memory and at the edge", async () => {
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const first = await route.GET();
+    assert.equal(first.headers.get("cache-control"), "public, s-maxage=30");
+    const lists = blob.calls.list.length;
+    const balances = rpc.urls.length;
+    fillDay(2);
+    const again = await route.GET();
+    assert.equal((await again.json()).remainingDrops, 5, "served from memory");
+    assert.equal(again.headers.get("cache-control"), "public, s-maxage=30");
+    assert.equal(blob.calls.list.length, lists, "no Blob list");
+    assert.equal(rpc.urls.length, balances, "no RPC call");
+    mock.timers.tick(30_000);
+    assert.equal((await (await route.GET()).json()).remainingDrops, 3, "reloaded after 30s");
+  });
+
+  it("drops the cached status after a payout", async () => {
+    assert.equal((await (await route.GET()).json()).remainingDrops, 5);
+    assert.equal((await drip(newWallet())).status, 200);
+    assert.equal((await (await route.GET()).json()).remainingDrops, 4);
+  });
+
+  it("doesn't cache a disabled status", async () => {
+    rpc.failBalance = true;
+    const off = await route.GET();
+    assert.deepEqual(await off.json(), { enabled: false });
+    assert.equal(off.headers.get("cache-control"), "no-store");
+    rpc.failBalance = false;
+    assert.equal((await (await route.GET()).json()).enabled, true);
   });
 
   it("reports disabled rather than throwing when the RPC fails", async () => {
@@ -251,14 +287,25 @@ describe("faucet drip", () => {
   });
 
   describe("send failures", () => {
-    it("releases both markers when the transfer can't be sent, so the wallet can retry", async () => {
+    it("releases both markers when the RPC rejects the transfer, so the wallet can retry", async () => {
       const addr = newWallet();
-      rpc.failSend = true;
+      rpc.failSend = "rejected";
       await expectError(await drip(addr), 502, /Could not send/);
       assert.equal(blob.files.has(walletMarker(addr)), false);
       assert.equal(blob.files.has(dayMarker(addr)), false);
-      rpc.failSend = false;
+      rpc.failSend = null;
       assert.equal((await drip(addr)).status, 200);
+    });
+
+    it("keeps both markers when sending fails in a way that may have broadcast it", async () => {
+      const addr = newWallet();
+      rpc.failSend = "timeout";
+      await expectError(await drip(addr), 504, /may have gone through/);
+      assert.equal(JSON.parse(blob.files.get(walletMarker(addr))!).state, "claimed");
+      assert.ok(blob.files.has(dayMarker(addr)));
+      rpc.failSend = null;
+      await expectError(await drip(addr), 409);
+      assert.equal(rpc.sent.length, 1, "paid once");
     });
 
     it("releases both markers when no blockhash is available", async () => {

@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { useAgents, useActions } from "@/lib/useProtocol";
-import { WAITLIST_URL, assetLabel, capacity, fmtDuration, freeCollateral, pct, short, sol } from "@/lib/program";
+import { WAITLIST_URL, assetLabel, capacity, fmtDuration, feePct, freeCollateral, pct, short, sol } from "@/lib/program";
 import { Certificate } from "@/components/Certificate";
 import { TxNotice } from "@/components/TxNotice";
 import { Avatar } from "@/components/Avatar";
@@ -165,7 +165,7 @@ export default function Marketplace() {
                           <span className={"tier " + tier.cls}>{tier.label}</span>
                         </td>
                         <td className="num">
-                          <div className="big pos">{pct(a.terms.feeBps)}</div>
+                          <div className="big pos">{feePct(a.terms.feeBps)}</div>
                           <div className="tiny">of profit</div>
                         </td>
                         <td className="num hide-sm">

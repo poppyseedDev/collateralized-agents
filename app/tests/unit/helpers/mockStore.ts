@@ -29,7 +29,6 @@ stubFile("@/lib/waitlistStore", {
     return store.entries;
   },
   loadLatestSnapshot: async () => store.snapshot,
-  dedupeByEmail: (rows: Stored[]) => rows,
   writeSnapshot: async () => {
     if (store.failLoad) throw new Error("could not download 1 of 2 waitlist entries");
     store.snapshots++;

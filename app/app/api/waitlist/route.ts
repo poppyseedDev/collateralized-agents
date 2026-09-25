@@ -1,15 +1,18 @@
 import { bearerToken, safeEqual } from "@/lib/auth";
 import { clientIp, rateLimiter } from "@/lib/rateLimit";
 import { lengthProblems, normalize, validate } from "@/lib/waitlist";
-import { dedupeByEmail, loadEntries, loadLatestSnapshot, saveEntry, storageConfigured, type Stored } from "@/lib/waitlistStore";
+import { describeUpdates, groupByEmail, type ExportRow } from "@/lib/waitlistExport";
+import { loadEntries, loadLatestSnapshot, saveEntry, storageConfigured, type Stored } from "@/lib/waitlistStore";
 
 /**
- * POST: store a waitlist submission (encrypted, see lib/waitlistStore). One entry per email;
- *       a resubmission replaces the earlier one.
- * GET with `Authorization: Bearer <token>`: export every submission as CSV, one row per email (latest wins).
- *     The token is WAITLIST_EXPORT_TOKEN when set, otherwise WAITLIST_ADMIN_KEY.
- *     `?key=<token>` is still accepted for older backup scripts; the header is preferred.
- *     &snapshot=latest reads the newest daily snapshot instead of the live entries.
+ * POST: store a waitlist submission (encrypted, see lib/waitlistStore). Emails are unverified, so a
+ *       resubmission never replaces the first entry for that email; it is stored beside it. The response
+ *       is the same either way, so it doesn't reveal whether an email is already on the list.
+ * GET with `Authorization: Bearer <token>`: export every submission as CSV, one row per email (first wins);
+ *     later submissions that change anything are summarised in the `laterSubmissions` column.
+ *     The token is WAITLIST_EXPORT_TOKEN when set, otherwise WAITLIST_ADMIN_KEY. Only the header is
+ *     accepted, so the credential never lands in URL logs.
+ *     ?snapshot=latest reads the newest daily snapshot instead of the live entries.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,13 +72,12 @@ function csvCell(v: unknown): string {
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const given = bearerToken(req) ?? url.searchParams.get("key");
-  if (!safeEqual(given, exportToken())) return new Response("Not found", { status: 404 });
+  if (!safeEqual(bearerToken(req), exportToken())) return new Response("Not found", { status: 404 });
 
-  let rows: Stored[];
+  let rows: ExportRow[];
   try {
     const all = url.searchParams.get("snapshot") === "latest" ? ((await loadLatestSnapshot())?.entries ?? []) : await loadEntries();
-    rows = dedupeByEmail(all);
+    rows = groupByEmail(all);
   } catch (e) {
     console.error("[waitlist] EXPORT FAILED:", e);
     return Response.json({ error: "export failed", detail: (e as Error).message }, { status: 502, headers: { "Cache-Control": "no-store" } });
@@ -85,7 +87,11 @@ export async function GET(req: Request) {
     "submittedAt", "name", "email", "telegram", "location", "wallet", "tradesCrypto", "usedAgents", "wouldTrust",
     "allocation", "trustFactors", "collateralHelps", "testDevnet", "notes", "id",
   ];
-  const csv = [cols.join(","), ...rows.map((r) => cols.map((c) => csvCell(r[c])).join(","))].join("\n");
+  // laterSubmissions goes last: the backup script checks that the header starts with submittedAt,name,email.
+  const csv = [
+    [...cols, "laterSubmissions"].join(","),
+    ...rows.map((r) => [...cols.map((c) => csvCell(r.entry[c])), csvCell(describeUpdates(r))].join(",")),
+  ].join("\n");
   return new Response(csv, {
     headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="waitlist-${new Date().toISOString().slice(0, 10)}.csv"`, "Cache-Control": "no-store" },
   });
