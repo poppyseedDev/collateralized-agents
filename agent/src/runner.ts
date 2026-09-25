@@ -1,4 +1,4 @@
-import { AGENTS, POLL_MS } from "./config.js";
+import { AGENTS, POLL_MS, WATCHDOG_SECS } from "./config.js";
 import { initOrca, mainPrice } from "./orca.js";
 import { AgentRunner, glog, heartbeatNote, msg, refreshClock, tickAll } from "./agent.js";
 
@@ -27,10 +27,22 @@ async function main() {
   for (const r of runners) await r.init();
 
   let stopping = false;
-  process.on("SIGINT", () => {
+  const stop = () => {
     stopping = true;
     console.log("stopping after this tick…");
-  });
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  // Runs on its own timer, so it also fires when a tick hangs.
+  let lastRan = Date.now();
+  setInterval(() => {
+    const idle = Math.round((Date.now() - lastRan) / 1000);
+    if (idle < WATCHDOG_SECS) return;
+    glog(`WATCHDOG no agent has completed a tick in ${idle}s; exiting so the supervisor restarts the runner`);
+    for (const r of runners) r.save();
+    process.exit(2);
+  }, 15_000).unref();
 
   while (!stopping) {
     await refreshClock();
@@ -42,7 +54,10 @@ async function main() {
     }
     const { ran, degraded } = await tickAll(runners, price);
     // Only report agents whose tick actually ran.
-    if (ran.length) await heartbeat(ran, heartbeatNote(degraded));
+    if (ran.length) {
+      lastRan = Date.now();
+      await heartbeat(ran, heartbeatNote(degraded));
+    }
     await new Promise((res) => setTimeout(res, POLL_MS));
   }
   for (const r of runners) r.save();

@@ -1,0 +1,27 @@
+# Fly.io app for the devnet agent runner. Deploy from the repo root:
+#   fly deploy . --config agent/fly.toml
+# One machine only: two runners on the same agents would trade the same books.
+app = "poa-agent-runner"
+primary_region = "fra"
+kill_signal = "SIGINT"
+kill_timeout = 120
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  STATE_DIR = "/data"
+  # Public keys only; the operator secrets that control collateral stay off the server.
+  OPERATOR_PUBKEYS = '{"orca-arb":"2Ww1AR5sQMT7CpTozdWkm6RYohYXWPGNXxsPvwKy5qqN","orca-momentum":"HENrdKZakH82gc73KAB98aa4ERjFLtVLbGon96WySvFv","orca-rotator":"GVF15RQnrz76izL964Rrces6JywM8Chz56Y67p9Ddiat"}'
+
+[[mounts]]
+  source = "runner_state"
+  destination = "/data"
+
+[[restart]]
+  policy = "always"
+  retries = 1000
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

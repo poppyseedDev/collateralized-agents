@@ -133,6 +133,13 @@ function numEnv(name: string, fallback: number, min: number, max: number): numbe
 /** Delay between ticks, 1 s to 1 h. */
 export const POLL_MS = numEnv("POLL_MS", 30_000, 1_000, 3_600_000);
 
+/**
+ * The runner exits when no agent has completed a tick for this long (a hung RPC call,
+ * or a socket pool left dead by a network drop), so its supervisor restarts it fresh.
+ * 2 min to 1 h; at least three polls.
+ */
+export const WATCHDOG_SECS = Math.max(numEnv("WATCHDOG_SECS", 600, 120, 3_600), Math.ceil((3 * POLL_MS) / 1000));
+
 /** Orca devnet market. */
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
 export const USDC_MINT = "BRjpCHtyQLNCo8gqRUr8jtdAj5AjPYQaoqbvcZiHok1k";

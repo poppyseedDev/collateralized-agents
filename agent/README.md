@@ -62,6 +62,41 @@ gitignored. Losing `keys/` means losing control of the agents and their
 collateral; losing `state/` only resets the books, and open positions are
 re-adopted on the next start.
 
+## Running on a server
+
+The runner is set up to run on Fly.io as the app `poa-agent-runner` (one machine
+in `fra`, 512 MB, a 1 GB volume `runner_state` mounted at `/data` for the state
+files). The server only holds the three trading keys; the operator keys, which
+can withdraw collateral, stay on the laptop.
+
+| Setting | Where |
+|---|---|
+| `EXECUTOR_KEYS` | Fly secret: `{"<id>": [secret key bytes]}` for each agent's `keys/<id>-executor.json` |
+| `OPERATOR_PUBKEYS` | `fly.toml` `[env]`: public keys only |
+| `HEARTBEAT_SECRET` | Fly secret, same value as the site's |
+| `RPC_URL`, `RPC_URL_FALLBACK` | Fly secrets; use a paid RPC (e.g. Helius) as primary and the public endpoint as fallback |
+| `WATCHDOG_SECS` | optional, default 600 |
+
+Deploy from the repo root (the image also needs `app/lib/idl.json`):
+
+```bash
+fly deploy . --config agent/fly.toml
+fly logs --app poa-agent-runner
+```
+
+Run only one runner at a time: before the Fly machine starts, stop the launchd job
+(`launchctl bootout gui/$(id -u)/dev.proofofagent.agent-runner`) and copy
+`state/*.json` to the volume (`fly ssh sftp shell --app poa-agent-runner`, then
+`put state/orca-arb.json /data/orca-arb.json` and so on).
+
+Three layers keep settlement alive:
+
+1. Fly restarts the process whenever it exits.
+2. The runner's own watchdog exits when no agent has completed a tick for
+   `WATCHDOG_SECS`, which covers a hung RPC call or a dead connection pool.
+3. `.github/workflows/runner-watchdog.yml` checks the site heartbeat every 5
+   minutes and fails (GitHub emails you) when the runner is offline.
+
 ## Limits
 
 - The runner has to stay online. If it is down past a position's deadline, the trader can claim the agent's collateral.

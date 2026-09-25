@@ -63,7 +63,7 @@ const unexpected = (name: string) => async () => {
 let n = 0;
 function makeRunner(strategy: Strategy, holdSecs = 600) {
   const cfg = { ...AGENTS[0], id: `test-agent-${++n}`, strategy, holdSecs };
-  const r = new AgentRunner(cfg, { operator: Keypair.generate(), executor: Keypair.generate() });
+  const r = new AgentRunner(cfg, { operator: Keypair.generate().publicKey, executor: Keypair.generate() });
   r.signer = { address: r.kp.publicKey.toBase58() } as KeyPairSigner;
   const calls: Calls = { draw: 0, settle: [], fallbackSettle: [] };
   r.program = fakeProgram(calls, "settle");

@@ -1,0 +1,8 @@
+# Only the agent runner is built with Docker (agent/Dockerfile). Allow-list what
+# it needs so keys, state, build output and node_modules never reach the image.
+*
+!agent/package.json
+!agent/package-lock.json
+!agent/tsconfig.json
+!agent/src/**
+!app/lib/idl.json

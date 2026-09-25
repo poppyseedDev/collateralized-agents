@@ -1,0 +1,25 @@
+# Outside watchdog for the agent runner. Every 5 minutes it reads the heartbeat
+# the runner posts to the site; if it is stale the run fails, and GitHub emails
+# the repo owner. (Scheduled runs can start a few minutes late.)
+name: runner watchdog
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check the runner heartbeat
+        run: |
+          beat=$(curl -fsS --retry 3 --retry-delay 5 --max-time 20 https://dev.proofofagent.dev/api/heartbeat)
+          echo "$beat"
+          echo "$beat" | jq -e '.online == true and (.agents | length) == 3' > /dev/null || {
+            echo "::error::Agent runner heartbeat is stale or missing agents: $beat"
+            exit 1
+          }

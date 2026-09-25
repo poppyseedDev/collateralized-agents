@@ -18,7 +18,7 @@ import {
   type Prog,
 } from "./chain.js";
 import { bestQuote, resolveSwap, signerFor, swapExactIn, SwapInFlight, type SwapResult } from "./orca.js";
-import { agentKeys } from "./keys.js";
+import { runnerKeys } from "./keys.js";
 import { loadState, saveState, type AgentState, type Book } from "./state.js";
 import { arbitrageEdge, arbitrageStep, leg2MinOut, momentumAction, rotateAction } from "./strategies.js";
 
@@ -103,10 +103,10 @@ export class AgentRunner {
 
   constructor(
     readonly cfg: AgentConfig,
-    keys: { operator: Keypair; executor: Keypair } = agentKeys(cfg.id),
+    keys: { operator: PublicKey; executor: Keypair } = runnerKeys(cfg.id),
   ) {
     this.kp = keys.executor;
-    this.operator = keys.operator.publicKey;
+    this.operator = keys.operator;
     this.program = programFor(this.kp);
     this.fallbackProgram = fallbackConnection ? programFor(this.kp, fallbackConnection) : null;
     this.agent = agentPda(this.operator, cfg.agentId);
