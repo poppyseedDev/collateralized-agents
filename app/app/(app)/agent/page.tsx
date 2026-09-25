@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey } from "@solana/web3.js";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import Link from "next/link";
 import { termsToInput, useActions, useBalance, useOperatorAgents } from "@/lib/useProtocol";
 import {
   AgentAccount,
   PositionAccount,
+  agentPda,
   capacity,
   freeCollateral,
   maxCapacity,
@@ -17,6 +18,12 @@ import {
   sol,
   toLamports,
 } from "@/lib/program";
+
+/** Lamports as a plain decimal string for an input field, rounded down so "max" never exceeds the real amount. */
+const lamportsToInput = (lamports: number, digits = 3) => {
+  const step = LAMPORTS_PER_SOL / 10 ** digits;
+  return (Math.floor(lamports / step) / 10 ** digits).toFixed(digits);
+};
 import { TxNotice } from "@/components/TxNotice";
 import { Avatar } from "@/components/Avatar";
 import { AgentForm, AgentDraft, DEFAULT_DRAFT, draftProblems } from "@/components/operator/AgentForm";
@@ -33,7 +40,7 @@ const fmtTime = (ts: number) =>
 export default function OperatorConsole() {
   const { publicKey } = useWallet();
   const actions = useActions();
-  const { agents, positions, loading, loaded, refresh } = useOperatorAgents(publicKey ?? null);
+  const { agents, positions, loading, loaded, error, refresh } = useOperatorAgents(publicKey ?? null);
   const [selected, setSelected] = useState<string | "new" | null>(null);
 
   useEffect(() => {
@@ -65,7 +72,12 @@ export default function OperatorConsole() {
 
       <div className="operator-layout">
         <aside className="agent-picker">
-          {agents.length === 0 && !loading && <div className="tiny" style={{ padding: 8 }}>No agents yet.</div>}
+          {error && agents.length === 0 && !loading && (
+            <div className="tiny neg" style={{ padding: 8 }}>
+              Couldn&apos;t load your agents. <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => refresh()}>Retry</button>
+            </div>
+          )}
+          {agents.length === 0 && !loading && !error && <div className="tiny" style={{ padding: 8 }}>No agents yet.</div>}
           {agents.map((a) => (
             <button
               key={a.publicKey.toBase58()}
@@ -107,7 +119,7 @@ export default function OperatorConsole() {
               refresh={refresh}
             />
           ) : (
-            <div className="empty">{loading ? "Loading…" : "Select an agent."}</div>
+            <div className="empty">{loading ? "Loading…" : error ? `Couldn't load your agents: ${error}` : "Select an agent."}</div>
           )}
         </div>
       </div>
@@ -117,6 +129,7 @@ export default function OperatorConsole() {
 
 function CreateAgent({ actions, nextId, onCreated }: { actions: Actions; nextId: BN; onCreated: (key: string) => void }) {
   const { publicKey } = useWallet();
+  const { connection } = useConnection();
   const [draft, setDraft] = useState<AgentDraft>(DEFAULT_DRAFT);
   const problems = draftProblems(draft);
   const busy = actions.tx.kind === "pending";
@@ -138,9 +151,14 @@ function CreateAgent({ actions, nextId, onCreated }: { actions: Actions; nextId:
           disabled={busy || problems.length > 0 || !publicKey}
           onClick={async () => {
             try {
-              await actions.createAgent(nextId, draft.name.trim(), draft.description.trim(), draft.terms);
-              const { agentPda } = await import("@/lib/program");
-              onCreated(agentPda(publicKey!, nextId).toBase58());
+              // The listed agents can miss accounts the decoder skips (e.g. older layouts), so the
+              // computed id may already be taken. Probe upward until the address is free.
+              let id = nextId;
+              for (let i = 0; i < 64 && (await connection.getAccountInfo(agentPda(publicKey!, id), "confirmed")); i++) {
+                id = id.addn(1);
+              }
+              await actions.createAgent(id, draft.name.trim(), draft.description.trim(), draft.terms);
+              onCreated(agentPda(publicKey!, id).toBase58());
             } catch {}
           }}
         >
@@ -264,9 +282,9 @@ function Overview({ agent, me, actions, busy, done }: { agent: AgentAccount; me:
         {balance !== null && (
           <p className="tiny">
             Wallet balance {sol(balance)} SOL ·{" "}
-            <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => setAmt((maxDeposit / 1e9).toFixed(3))}>Deposit max</button>
+            <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => setAmt(lamportsToInput(maxDeposit))}>Deposit max</button>
             {" · "}
-            <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => setAmt(sol(freeCollateral(agent), 3).replace(/,/g, ""))}>Withdraw all free</button>
+            <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => setAmt(lamportsToInput(freeCollateral(agent).toNumber()))}>Withdraw all free</button>
           </p>
         )}
         <div className="actions">
@@ -346,7 +364,7 @@ function DraftTerms({ agent, actions, busy, done }: { agent: AgentAccount; actio
     <>
       <div className="card">
         <h3>Draft terms</h3>
-        <AgentForm value={draft} onChange={setDraft} bondSol={Number(sol(agent.totalCollateral))} />
+        <AgentForm value={draft} onChange={setDraft} bondSol={agent.totalCollateral.toNumber() / LAMPORTS_PER_SOL} />
         {problems.length > 0 && <ul className="problems">{problems.map((p) => <li key={p}>{p}</li>)}</ul>}
         <div className="actions">
           <button className="btn" disabled={busy || !dirty || problems.length > 0}

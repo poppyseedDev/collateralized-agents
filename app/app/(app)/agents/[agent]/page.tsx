@@ -21,16 +21,25 @@ export default function AgentPage() {
   const actions = useActions();
   const [agent, setAgent] = useState<AgentAccount | null | undefined>(undefined);
   const [positions, setPositions] = useState<PositionAccount[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = async (fresh = false) => {
+    let pk: PublicKey;
     try {
-      const pk = new PublicKey(key);
+      pk = new PublicKey(key);
+    } catch {
+      setAgent(null); // not a valid address: nothing to find
+      return;
+    }
+    try {
       const snap = await fetchProgramAccounts(fresh);
       const a = snap.agents.find((x) => x.publicKey.equals(pk)) ?? null;
       setAgent(a);
       setPositions(a ? snap.positions.filter((p) => p.agent.equals(pk)) : []);
-    } catch {
-      setAgent(null);
+      setLoadError(null);
+    } catch (e) {
+      // Keep whatever was shown before; only an empty page turns into the error state.
+      setLoadError((e as Error).message || "request failed");
     }
   };
   useEffect(() => {
@@ -41,6 +50,14 @@ export default function AgentPage() {
     if (agent) document.title = `${agent.name} · Proof of Agent`;
   }, [agent]);
 
+  if (agent === undefined && loadError) {
+    return (
+      <div className="empty">
+        Couldn&apos;t load this agent. The network or RPC may be down.{" "}
+        <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={() => load(true)}>Retry</button>
+      </div>
+    );
+  }
   if (agent === undefined) return <div className="empty">Loading…</div>;
   if (agent === null || agent.status === "draft") {
     return <div className="empty">This agent doesn&apos;t exist or hasn&apos;t been published yet. <Link href="/" className="box-link">Browse agents</Link></div>;

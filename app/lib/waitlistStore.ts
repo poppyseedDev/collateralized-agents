@@ -1,20 +1,42 @@
 import "server-only";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { list, put } from "@vercel/blob";
 import type { Submission } from "./waitlist";
 
-/** Server-side storage for waitlist entries: encrypted files in Vercel Blob, plus daily snapshots. */
+/**
+ * Server-side storage for waitlist entries: encrypted files in Vercel Blob, plus daily snapshots.
+ *
+ * Layout (all under the public store, contents AES-256-GCM encrypted):
+ *   waitlist/<YYYY-MM-DD>/<uuid>-<suffix>.enc   entries written before email dedup (read-only now)
+ *   waitlist/by-email/<hmac>.enc                one file per email; a resubmission overwrites it
+ *   waitlist-snapshots/<stamp>-<suffix>.enc     daily snapshot of every entry
+ *
+ * The encryption key is derived from WAITLIST_ADMIN_KEY. Changing that variable makes every
+ * existing entry and snapshot unreadable, so it must never be rotated. Rotate WAITLIST_EXPORT_TOKEN instead.
+ */
 
 export type Stored = Submission & { id: string; submittedAt: string; userAgent: string };
 
 export const ENTRY_PREFIX = "waitlist/";
 export const SNAPSHOT_PREFIX = "waitlist-snapshots/";
+export const BY_EMAIL_PREFIX = `${ENTRY_PREFIX}by-email/`;
+/** How many blobs are downloaded at once. */
+const DOWNLOAD_CONCURRENCY = 8;
 
 const cipherKey = () => {
   const secret = process.env.WAITLIST_ADMIN_KEY;
   if (!secret) throw new Error("WAITLIST_ADMIN_KEY is not set");
   return createHash("sha256").update(secret).digest();
 };
+
+/**
+ * Pathname-safe id for an email. Keyed with a subkey of the cipher key, so the public
+ * pathname reveals nothing and nobody without WAITLIST_ADMIN_KEY can compute it.
+ */
+export function emailId(email: string): string {
+  const subkey = createHmac("sha256", cipherKey()).update("waitlist-email-index-v1").digest();
+  return createHmac("sha256", subkey).update(email.trim().toLowerCase(), "utf8").digest("hex");
+}
 
 export function encrypt(plain: string): string {
   const iv = randomBytes(12);
@@ -32,11 +54,14 @@ export function decrypt(b64: string): string {
 
 export const storageConfigured = () => !!process.env.BLOB_READ_WRITE_TOKEN && !!process.env.WAITLIST_ADMIN_KEY;
 
+/** Stores an entry under its email's id, replacing any earlier submission from the same email. */
 export async function saveEntry(stored: Stored) {
-  await put(`${ENTRY_PREFIX}${stored.submittedAt.slice(0, 10)}/${stored.id}.enc`, encrypt(JSON.stringify(stored)), {
+  await put(`${BY_EMAIL_PREFIX}${emailId(stored.email)}.enc`, encrypt(JSON.stringify(stored)), {
     access: "public", // the store is public; contents are encrypted and the path is unguessable
     contentType: "text/plain",
-    addRandomSuffix: true,
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    cacheControlMaxAge: 60, // the minimum; the file can change when the same email resubmits
   });
 }
 
@@ -51,22 +76,78 @@ async function listAll(prefix: string) {
   return blobs;
 }
 
-/** Every live entry, oldest first. */
-export async function loadEntries(): Promise<Stored[]> {
-  const rows: Stored[] = [];
-  for (const b of await listAll(ENTRY_PREFIX)) {
-    const res = await fetch(b.downloadUrl ?? b.url, { cache: "no-store" });
-    if (!res.ok) continue;
-    try {
-      rows.push(JSON.parse(decrypt(await res.text())) as Stored);
-    } catch {
-      // skip anything that isn't one of our encrypted entries
+/** Runs `fn` over `items` with at most `limit` calls in flight, keeping order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
     }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+async function download(url: string, attempts = 3): Promise<string> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) return await res.text();
+      last = new Error(`HTTP ${res.status}`);
+      if (res.status === 404) break;
+    } catch (e) {
+      last = e;
+    }
+    await new Promise((r) => setTimeout(r, 250 * (i + 1)));
   }
+  throw last instanceof Error ? last : new Error(String(last));
+}
+
+/**
+ * Every stored entry (old date-path files and per-email files), oldest first, not deduplicated.
+ * Throws if any file can't be downloaded, so a backup or export is never silently partial.
+ * Files that download but don't decrypt are skipped with a warning.
+ */
+export async function loadEntries(): Promise<Stored[]> {
+  const blobs = await listAll(ENTRY_PREFIX);
+  const failed: string[] = [];
+  const results = await mapLimit(blobs, DOWNLOAD_CONCURRENCY, async (b) => {
+    let text: string;
+    try {
+      text = await download(b.downloadUrl ?? b.url);
+    } catch (e) {
+      failed.push(`${b.pathname}: ${(e as Error).message}`);
+      return null;
+    }
+    try {
+      return JSON.parse(decrypt(text)) as Stored;
+    } catch {
+      console.warn(`[waitlist] skipping ${b.pathname}: not a readable entry`);
+      return null;
+    }
+  });
+  if (failed.length) {
+    throw new Error(`could not download ${failed.length} of ${blobs.length} waitlist entries (${failed.slice(0, 3).join("; ")})`);
+  }
+  const rows = results.filter((r): r is Stored => r !== null);
   return rows.sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
 }
 
-/** Writes one encrypted file holding every entry. Returns the entry count. */
+/** One row per email (case-insensitive), keeping the latest submission, oldest first. */
+export function dedupeByEmail(rows: Stored[]): Stored[] {
+  const latest = new Map<string, Stored>();
+  for (const r of rows) {
+    const k = (r.email ?? "").trim().toLowerCase() || `id:${r.id}`;
+    const prev = latest.get(k);
+    if (!prev || prev.submittedAt <= r.submittedAt) latest.set(k, r);
+  }
+  return [...latest.values()].sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
+}
+
+/** Writes one encrypted file holding every stored entry (not deduplicated). Returns the entry count. */
 export async function writeSnapshot(): Promise<{ count: number; pathname: string }> {
   const entries = await loadEntries();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -82,6 +163,6 @@ export async function writeSnapshot(): Promise<{ count: number; pathname: string
 export async function loadLatestSnapshot(): Promise<{ entries: Stored[]; pathname: string } | null> {
   const snaps = (await listAll(SNAPSHOT_PREFIX)).sort((a, b) => b.pathname.localeCompare(a.pathname));
   if (!snaps.length) return null;
-  const res = await fetch(snaps[0].downloadUrl ?? snaps[0].url, { cache: "no-store" });
-  return { entries: JSON.parse(decrypt(await res.text())) as Stored[], pathname: snaps[0].pathname };
+  const text = await download(snaps[0].downloadUrl ?? snaps[0].url);
+  return { entries: JSON.parse(decrypt(text)) as Stored[], pathname: snaps[0].pathname };
 }

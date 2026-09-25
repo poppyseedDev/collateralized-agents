@@ -1,4 +1,5 @@
 import { head, put } from "@vercel/blob";
+import { hasBearer } from "@/lib/auth";
 
 /**
  * Liveness of the agent runners. The runner POSTs every tick with the shared
@@ -12,12 +13,11 @@ type Beat = { at: string; agents: string[]; note?: string };
 let cached: Beat | null = null;
 
 export async function POST(req: Request) {
-  const secret = process.env.HEARTBEAT_SECRET;
-  if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) return new Response("Not found", { status: 404 });
+  if (!hasBearer(req, process.env.HEARTBEAT_SECRET)) return new Response("Not found", { status: 404 });
   const body = (await req.json().catch(() => ({}))) as Partial<Beat>;
   cached = { at: new Date().toISOString(), agents: Array.isArray(body.agents) ? body.agents.slice(0, 20) : [], note: body.note?.slice(0, 200) };
   if (process.env.BLOB_READ_WRITE_TOKEN) {
-    await put(PATH, JSON.stringify(cached), { access: "public", contentType: "application/json", addRandomSuffix: false, cacheControlMaxAge: 0 }).catch(() => {});
+    await put(PATH, JSON.stringify(cached), { access: "public", contentType: "application/json", addRandomSuffix: false, allowOverwrite: true, cacheControlMaxAge: 60 }).catch((e) => console.error("[heartbeat] blob write failed:", e));
   }
   return Response.json({ ok: true });
 }

@@ -127,7 +127,7 @@ export function Certificate({
           {balance !== null && (
             <span className="box-balance">
               Balance {sol(balance)} SOL
-              <button type="button" className="max-btn" onClick={() => setAmount((maxLamports / 1e9).toFixed(3))}>Max</button>
+              <button type="button" className="max-btn" onClick={() => setAmount((Math.floor(maxLamports / 1e6) / 1e3).toFixed(3))}>Max</button>
             </span>
           )}
         </div>

@@ -67,14 +67,15 @@ export function useAgents() {
 export function usePositions(filter: { trader?: PublicKey; agent?: PublicKey } | null) {
   const [positions, setPositions] = useState<PositionAccount[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const key = filter?.trader?.toBase58() ?? filter?.agent?.toBase58() ?? null;
   const kind = filter?.trader ? "trader" : "agent";
-
 
   const load = useCallback(
     async (fresh: boolean) => {
       if (!key) {
         setPositions([]);
+        setError(null);
         return;
       }
       setLoading(true);
@@ -83,6 +84,9 @@ export function usePositions(filter: { trader?: PublicKey; agent?: PublicKey } |
         const list = snap.positions.filter((p) => (kind === "trader" ? p.trader : p.agent).toBase58() === key);
         list.sort((a, b) => b.openedAt.cmp(a.openedAt));
         setPositions(list);
+        setError(null);
+      } catch (e) {
+        setError((e as Error).message || "Could not load positions");
       } finally {
         setLoading(false);
       }
@@ -93,7 +97,7 @@ export function usePositions(filter: { trader?: PublicKey; agent?: PublicKey } |
   useEffect(() => {
     load(false);
   }, [load]);
-  return { positions, loading, refresh: () => load(true) };
+  return { positions, loading, error, refresh: () => load(true) };
 }
 
 export type TxState =
@@ -325,6 +329,7 @@ export function useOperatorAgents(operator: PublicKey | null) {
   const [agents, setAgents] = useState<AgentAccount[]>([]);
   const [positions, setPositions] = useState<PositionAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   /** Which operator the current data belongs to; null until the first load finishes. */
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const key = operator?.toBase58() ?? null;
@@ -334,6 +339,7 @@ export function useOperatorAgents(operator: PublicKey | null) {
       if (!key) {
         setAgents([]);
         setPositions([]);
+        setError(null);
         setLoading(false);
         return;
       }
@@ -346,6 +352,9 @@ export function useOperatorAgents(operator: PublicKey | null) {
         setAgents(mine);
         setPositions(snap.positions.filter((p) => ids.has(p.agent.toBase58())));
         setLoadedFor(key);
+        setError(null);
+      } catch (e) {
+        setError((e as Error).message || "Could not load agents");
       } finally {
         setLoading(false);
       }
@@ -356,7 +365,7 @@ export function useOperatorAgents(operator: PublicKey | null) {
   useEffect(() => {
     load(false);
   }, [load]);
-  return { agents, positions, loading, loaded: key !== null && loadedFor === key, refresh: () => load(true) };
+  return { agents, positions, loading, error, loaded: key !== null && loadedFor === key, refresh: () => load(true) };
 }
 
 /** SOL balance of a wallet, refreshed on demand and after each confirmed transaction. */

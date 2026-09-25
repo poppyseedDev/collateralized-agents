@@ -6,8 +6,19 @@
 set -euo pipefail
 
 APP_DIR="${0:A:h:h}"
-KEY="$(security find-generic-password -a proofofagent -s WAITLIST_ADMIN_KEY -w 2>/dev/null || grep '^WAITLIST_ADMIN_KEY=' "$APP_DIR/.env.local" 2>/dev/null | cut -d= -f2)"
-[ -n "$KEY" ] || { echo "no WAITLIST_ADMIN_KEY in Keychain or .env.local" >&2; exit 1; }
+# Export credential, first match wins:
+#   1. WAITLIST_EXPORT_TOKEN in the environment
+#   2. WAITLIST_EXPORT_TOKEN in the Keychain or .env.local
+#   3. WAITLIST_ADMIN_KEY in the Keychain or .env.local (works while the server has no WAITLIST_EXPORT_TOKEN set)
+secret() {
+  security find-generic-password -a proofofagent -s "$1" -w 2>/dev/null \
+    || { grep "^$1=" "$APP_DIR/.env.local" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"; } \
+    || true
+}
+KEY="${WAITLIST_EXPORT_TOKEN:-}"
+[ -n "$KEY" ] || KEY="$(secret WAITLIST_EXPORT_TOKEN)"
+[ -n "$KEY" ] || KEY="$(secret WAITLIST_ADMIN_KEY)"
+[ -n "$KEY" ] || { echo "no WAITLIST_EXPORT_TOKEN or WAITLIST_ADMIN_KEY in env, Keychain or .env.local" >&2; exit 1; }
 
 PRIMARY="$HOME/Library/Application Support/ProofOfAgent/backups/waitlist"
 LOCAL="$HOME/Documents/ProofOfAgent-backups/waitlist"
@@ -16,7 +27,9 @@ STAMP="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-curl -fsS --max-time 120 --retry 8 --retry-delay 30 --retry-all-errors "https://proofofagent.dev/api/waitlist?key=$KEY" -o "$TMP"
+# The token goes in an Authorization header, passed on stdin so it never shows up in `ps` or in URL logs.
+printf 'header = "Authorization: Bearer %s"\n' "$KEY" \
+  | curl -fsS --max-time 120 --retry 8 --retry-delay 30 --retry-all-errors -K - "https://proofofagent.dev/api/waitlist" -o "$TMP"
 head -1 "$TMP" | grep -q '^submittedAt,name,email' || { echo "unexpected export format" >&2; exit 1; }
 ROWS=$(( $(wc -l < "$TMP") ))   # header has no trailing newline, so lines == entries
 

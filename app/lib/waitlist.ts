@@ -45,6 +45,29 @@ export const EMPTY: Submission = {
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
+/** Longest accepted value per free-text field. Longer input is rejected, not truncated. */
+export const MAX_LEN = { name: 80, email: 120, telegram: 64, location: 80, wallet: 64, notes: 1000 } as const;
+const LABEL: Record<keyof typeof MAX_LEN, string> = {
+  name: "Name", email: "Email", telegram: "Telegram handle", location: "Location", wallet: "Wallet address", notes: "Notes",
+};
+
+/** Problems with the raw request body's field lengths and types, before normalizing. */
+export function lengthProblems(raw: unknown): string[] {
+  if (!raw || typeof raw !== "object") return [];
+  const r = raw as Record<string, unknown>;
+  const out: string[] = [];
+  for (const k of Object.keys(MAX_LEN) as (keyof typeof MAX_LEN)[]) {
+    const v = r[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "string") out.push(`${LABEL[k]} must be text.`);
+    else if (v.trim().length > MAX_LEN[k]) out.push(`${LABEL[k]} is too long (max ${MAX_LEN[k]} characters).`);
+  }
+  if (r.trustFactors !== undefined && (!Array.isArray(r.trustFactors) || r.trustFactors.length > TRUST_FACTORS.length)) {
+    out.push("Invalid trust factors.");
+  }
+  return out;
+}
+
 /** Returns a list of problems; empty means valid. */
 export function validate(s: Submission): string[] {
   const out: string[] = [];
@@ -55,7 +78,9 @@ export function validate(s: Submission): string[] {
   else if (!BASE58.test(s.wallet.trim())) out.push("Wallet address doesn't look like a Solana address.");
   if (!s.wouldTrust) out.push("Tell us whether you'd trust an agent to trade for you.");
   if (!s.allocation) out.push("Pick a rough allocation.");
-  if (s.notes.length > 1000) out.push("Notes are too long.");
+  for (const k of Object.keys(MAX_LEN) as (keyof typeof MAX_LEN)[]) {
+    if (s[k].length > MAX_LEN[k]) out.push(`${LABEL[k]} is too long (max ${MAX_LEN[k]} characters).`);
+  }
   return out;
 }
 
@@ -70,11 +95,11 @@ export function normalize(raw: unknown): Submission | null {
     ? (r.trustFactors.filter((f): f is (typeof TRUST_FACTORS)[number] => TRUST_FACTORS.includes(f as never)))
     : [];
   return {
-    name: str("name", 80),
-    email: str("email", 120).toLowerCase(),
-    telegram: str("telegram", 64).replace(/^@/, ""),
-    location: str("location", 80),
-    wallet: str("wallet", 64),
+    name: str("name", MAX_LEN.name),
+    email: str("email", MAX_LEN.email).toLowerCase(),
+    telegram: str("telegram", MAX_LEN.telegram).replace(/^@/, ""),
+    location: str("location", MAX_LEN.location),
+    wallet: str("wallet", MAX_LEN.wallet),
     tradesCrypto: pick("tradesCrypto", YES_NO),
     usedAgents: pick("usedAgents", YES_NO),
     wouldTrust: pick("wouldTrust", YES_NO_MAYBE),
@@ -82,6 +107,6 @@ export function normalize(raw: unknown): Submission | null {
     trustFactors: [...new Set(factors)],
     collateralHelps: pick("collateralHelps", YES_NO_MAYBE),
     testDevnet: pick("testDevnet", YES_NO),
-    notes: str("notes", 1000),
+    notes: str("notes", MAX_LEN.notes),
   };
 }

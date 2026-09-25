@@ -15,7 +15,7 @@ function fmtTime(ts: number) {
 
 export default function Positions() {
   const { publicKey } = useWallet();
-  const { positions, loading, refresh } = usePositions(publicKey ? { trader: publicKey } : null);
+  const { positions, loading, error, refresh } = usePositions(publicKey ? { trader: publicKey } : null);
   const { agents } = useAgents();
   const actions = useActions();
   const now = Math.floor(Date.now() / 1000);
@@ -76,12 +76,16 @@ export default function Positions() {
       <div className="sec-head">
         <h2>My positions</h2>
         <span className="meta">
-          {loading ? "Syncing…" : `${positions.length} total`}
+          {loading ? "Syncing…" : error ? "Couldn't load" : `${positions.length} total`}
           <button className="btn ghost sm icon-btn" onClick={refresh} aria-label="Refresh"><IconRefresh /></button>
         </span>
       </div>
       <TxNotice tx={actions.tx} />
-      {positions.length === 0 && !loading ? (
+      {error && positions.length === 0 && !loading ? (
+        <div className="empty">
+          Couldn&apos;t load your positions. <button type="button" className="rules-toggle" style={{ padding: 0 }} onClick={refresh}>Retry</button>
+        </div>
+      ) : positions.length === 0 && !loading ? (
         <div className="empty">You have not allocated capital to any agent yet.</div>
       ) : (
         <div className="table-wrap">

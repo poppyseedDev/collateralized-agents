@@ -112,7 +112,7 @@ export function AgentForm({
             }} />
           <span className="hint">
             Each 1 SOL of collateral lets the agent manage up to {perSol.toFixed(2)} SOL.
-            {bondSol !== undefined && ` Your ${bondSol} SOL bond covers ${(bondSol * perSol).toFixed(2)} SOL.`}
+            {bondSol !== undefined && ` Your ${bondSol.toLocaleString(undefined, { maximumFractionDigits: 3 })} SOL bond covers ${(bondSol * perSol).toFixed(2)} SOL.`}
           </span>
         </div>
         <div className="field">
