@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { register } from "node:module";
-import { pathToFileURL } from "node:url";
 // Runs the TypeScript sources directly; build step comes later.
-register("tsx/esm", pathToFileURL("./"));
+// A bare import resolves from this file (import.meta.url), not the working directory,
+// so tsx is found in this package's dependencies wherever `poa` is run from.
+import { register } from "tsx/esm/api";
+register();
 await import("../src/cli.ts");

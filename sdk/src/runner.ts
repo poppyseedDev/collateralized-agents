@@ -9,10 +9,15 @@
  * One position trades at a time; others queue. Accounting is by wallet
  * balance, so anything the bot does with the wallet counts for the position.
  * State is persisted so a restart resumes open positions.
+ *
+ * The hook runs in its own process group. At settle time the whole group gets
+ * SIGTERM, then up to `graceSecs` to unwind (never past the deadline), then
+ * SIGKILL. The balance is read only once nothing in the group is running.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import type { Keypair, PublicKey } from "@solana/web3.js";
+import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { dirname } from "node:path";
+import { PublicKey, type Keypair } from "@solana/web3.js";
 import { LAMPORTS, PoaClient, type Agent, type Position } from "./client.js";
 
 export type RunnerOptions = {
@@ -27,6 +32,11 @@ export type RunnerOptions = {
   holdSecs: number;
   /** Settle at least this many seconds before the deadline. */
   bufferSecs: number;
+  /**
+   * After SIGTERM at settle time, how long the hook may take to unwind before SIGKILL.
+   * Default 60. Capped so the hook never runs past the deadline minus the time needed to settle.
+   */
+  graceSecs?: number;
   /** Do not trade: run the hook with POA_PAPER=1 and settle exactly the principal. */
   paper: boolean;
   pollMs: number;
@@ -39,24 +49,93 @@ type State = { active: Book | null; history: { position: string; principal: stri
 
 const now = () => Math.floor(Date.now() / 1000);
 const sol = (n: bigint | number | string) => (Number(n) / LAMPORTS).toFixed(4);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Seconds kept free before the deadline for the settle transaction itself. */
+const SETTLE_TX_SECS = 30;
+const TOKEN_PROGRAMS = [
+  new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+  new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+];
+
+/** True while any process in the group still exists. */
+function groupAlive(pgid: number) {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function signalGroup(pgid: number, sig: NodeJS.Signals) {
+  try {
+    process.kill(-pgid, sig);
+  } catch {
+    // group already gone
+  }
+}
+
+/** Writes to a temp file, fsyncs, keeps the previous version as `.bak`, then renames over the original. */
+function writeAtomic(path: string, data: string) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp-${process.pid}`;
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  if (existsSync(path)) copyFileSync(path, `${path}.bak`);
+  renameSync(tmp, path);
+}
+
+/**
+ * Loads the runner state. A file that does not parse is moved aside to
+ * `<file>.corrupt-<ts>` and the backup is used, so a bad write cannot crash-loop the runner.
+ */
+function loadRunnerState(path: string, log: (m: string) => void): State {
+  const empty: State = { active: null, history: [] };
+  if (!existsSync(path)) return empty;
+  try {
+    return { ...empty, ...JSON.parse(readFileSync(path, "utf8")) };
+  } catch (e) {
+    const aside = `${path}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    renameSync(path, aside);
+    log(`ALERT state file ${path} did not parse (${(e as Error).message}); moved it to ${aside}`);
+    const bak = `${path}.bak`;
+    if (existsSync(bak)) {
+      try {
+        const s = { ...empty, ...JSON.parse(readFileSync(bak, "utf8")) };
+        log(`ALERT resuming from backup ${bak}; check the wallet against it`);
+        return s;
+      } catch (e2) {
+        log(`ALERT backup ${bak} did not parse either (${(e2 as Error).message})`);
+      }
+    }
+    log("ALERT starting with empty state; a trading position will be re-adopted from chain");
+    return empty;
+  }
+}
 
 export class Runner {
   private client: PoaClient;
   private agentAcc!: Agent;
   private state: State;
   private hook: ChildProcess | null = null;
+  /** Set when the hook's shell has exited; its children may still be running. */
+  private hookExited = false;
   private stopping = false;
   private log: (msg: string) => void;
 
   constructor(private opts: RunnerOptions) {
     this.client = new PoaClient(opts.rpcUrl, opts.tradingKey);
     this.log = opts.log ?? ((m) => console.log(new Date().toISOString(), m));
-    this.state = existsSync(opts.stateFile) ? JSON.parse(readFileSync(opts.stateFile, "utf8")) : { active: null, history: [] };
+    this.state = loadRunnerState(opts.stateFile, this.log);
   }
 
   private save() {
-    mkdirSync(require_dirname(this.opts.stateFile), { recursive: true });
-    writeFileSync(this.opts.stateFile, JSON.stringify(this.state, null, 2));
+    writeAtomic(this.opts.stateFile, JSON.stringify(this.state, null, 2));
   }
 
   private async notify(event: string, message: string) {
@@ -87,7 +166,7 @@ export class Runner {
 
   stop() {
     this.stopping = true;
-    this.hook?.kill("SIGTERM");
+    if (this.hook?.pid) signalGroup(this.hook.pid, "SIGTERM");
   }
 
   private settleTime(drawnAt: number, deadline: number) {
@@ -102,13 +181,14 @@ export class Runner {
       const p = positions.find((x) => x.publicKey.toBase58() === active.position);
       if (!p || p.status !== "trading") {
         this.log(`position ${active.position} is ${p?.status ?? "gone"}; dropping book`);
-        this.hook?.kill("SIGTERM");
+        if (this.hook?.pid) signalGroup(this.hook.pid, "SIGTERM");
+        this.hook = null;
         this.state.active = null;
         this.save();
         return;
       }
       const dueIn = active.settleAt - now();
-      if (dueIn <= 0 || (this.hook && this.hook.exitCode !== null)) {
+      if (dueIn <= 0 || (this.hook && this.hookExited)) {
         await this.settle(p, active);
       } else if (dueIn <= 60 && dueIn > 60 - this.opts.pollMs / 1000) {
         await this.notify("settle-soon", `position ${p.publicKey.toBase58()} settles in ${dueIn}s`);
@@ -160,23 +240,65 @@ export class Runner {
       POA_RPC_URL: this.opts.rpcUrl,
       POA_PAPER: this.opts.paper ? "1" : "0",
     };
-    this.hook = spawn(this.opts.hook, { shell: true, stdio: "inherit", env });
-    this.log(`hook started (pid ${this.hook.pid}): ${this.opts.hook}`);
-    this.hook.on("exit", (code) => this.log(`hook exited with code ${code}`));
+    // Own process group, so settle can stop the hook and everything it started.
+    const hook = spawn(this.opts.hook, { shell: true, stdio: "inherit", env, detached: true });
+    this.hook = hook;
+    this.hookExited = false;
+    this.log(`hook started (pid ${hook.pid}): ${this.opts.hook}`);
+    hook.on("exit", (code, signal) => {
+      if (this.hook === hook) this.hookExited = true;
+      this.log(`hook exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
+    });
+  }
+
+  /**
+   * Stops the hook's process group: SIGTERM, up to the grace period for it to
+   * unwind, then SIGKILL. Returns once no process in the group is left.
+   */
+  private async stopHook(deadline: number) {
+    const hook = this.hook;
+    this.hook = null;
+    if (!hook?.pid) return;
+    const pgid = hook.pid;
+    if (!groupAlive(pgid)) return;
+    const grace = Math.max(0, Math.min(this.opts.graceSecs ?? 60, deadline - SETTLE_TX_SECS - now()));
+    this.log(`hook still running at settle time; sending SIGTERM to its process group, ${grace}s to finish`);
+    signalGroup(pgid, "SIGTERM");
+    const until = Date.now() + grace * 1000;
+    while (groupAlive(pgid) && Date.now() < until) await sleep(250);
+    if (groupAlive(pgid)) {
+      this.log("hook did not stop in time; sending SIGKILL to its process group");
+      signalGroup(pgid, "SIGKILL");
+      const hard = Date.now() + 5000;
+      while (groupAlive(pgid) && Date.now() < hard) await sleep(100);
+      if (groupAlive(pgid)) this.log("warning: hook process group still present after SIGKILL");
+    }
+  }
+
+  /** Token accounts with a non-zero balance: anything the hook left outside SOL is not counted. */
+  private async strayTokens(): Promise<string[]> {
+    const out: string[] = [];
+    for (const programId of TOKEN_PROGRAMS) {
+      const res = await this.client.connection.getParsedTokenAccountsByOwner(this.opts.tradingKey.publicKey, { programId });
+      for (const a of res.value) {
+        const info = a.account.data.parsed?.info;
+        if (info && info.tokenAmount?.amount !== "0") out.push(`${info.tokenAmount.uiAmountString} of ${info.mint}`);
+      }
+    }
+    return out;
   }
 
   private async settle(p: Position, book: Book) {
-    if (this.hook && this.hook.exitCode === null) {
-      this.log("hook still running at settle time; sending SIGTERM");
-      this.hook.kill("SIGTERM");
-      await new Promise((r) => setTimeout(r, 5000));
-      if (this.hook.exitCode === null) this.hook.kill("SIGKILL");
-    }
-    this.hook = null;
+    // Read the balance only once nothing the hook started is still running.
+    await this.stopHook(book.deadline);
 
     const principal = BigInt(book.principal);
     let returned = principal;
     if (!this.opts.paper) {
+      const stray = await this.strayTokens().catch((e) => [`(could not check token balances: ${(e as Error).message})`]);
+      if (stray.length) {
+        await this.notify("warning", `trading wallet holds non-SOL tokens at settle time, which are not counted for the position: ${stray.join(", ")}`);
+      }
       const balance = BigInt(await this.client.connection.getBalance(this.opts.tradingKey.publicKey));
       const delta = balance - BigInt(book.balanceAtDraw);
       returned = principal + delta;
@@ -185,16 +307,11 @@ export class Runner {
       const spare = balance - returned;
       if (spare < 20_000n) returned = balance > 20_000n ? balance - 20_000n : 0n;
     }
-    const sig = await this.client.settlePosition(this.agentAcc, p, Number(returned));
+    const sig = await this.client.settlePosition(this.agentAcc, p, returned);
     const pnl = returned - principal;
     await this.notify("settled", `position ${book.position}: principal ${sol(principal)} returned ${sol(returned)} (${pnl >= 0n ? "+" : ""}${sol(pnl)}) ${sig.slice(0, 12)}…`);
     this.state.history.push({ position: book.position, principal: book.principal, returned: returned.toString(), at: now() });
     this.state.active = null;
     this.save();
   }
-}
-
-function require_dirname(p: string) {
-  const i = p.lastIndexOf("/");
-  return i > 0 ? p.slice(0, i) : ".";
 }

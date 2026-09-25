@@ -4,18 +4,20 @@
   "description": "Run any trading bot as a Proof of Agent operator: publish terms, post collateral, draw positions, and settle before the deadline.",
   "license": "MIT",
   "type": "module",
-  "bin": { "poa": "./bin/poa.js" },
+  "bin": {
+    "poa": "./bin/poa.js"
+  },
   "scripts": {
     "poa": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.32.1",
-    "@solana/web3.js": "1.99.0"
+    "@solana/web3.js": "1.99.0",
+    "tsx": "4.23.15"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "tsx": "^4",
     "typescript": "^5"
   }
 }

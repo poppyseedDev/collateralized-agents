@@ -2,10 +2,15 @@
  * Minimal client for the Proof of Agent program. Uses only the public IDL and
  * program id, so it works for any operator without access to our app code.
  */
-import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AnchorProvider, BN, Program, Wallet, type Idl } from "@coral-xyz/anchor";
+import anchor, { AnchorProvider, Program, Wallet, type BN as AnchorBN, type Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+
+// Node before 26 cannot see BN as a named export of anchor's CommonJS build.
+export const BN = anchor.BN;
+export type BN = AnchorBN;
 
 export const IDL = JSON.parse(readFileSync(fileURLToPath(new URL("../idl/proof_of_agent.json", import.meta.url)), "utf8")) as Idl & { address: string };
 export const PROGRAM_ID = new PublicKey(IDL.address);
@@ -73,7 +78,24 @@ export type Position = {
 
 const enumKey = <T extends string>(v: object) => Object.keys(v)[0] as T;
 
+/** Lamports or seconds: a safe-integer number, a bigint, or a BN. */
+export type Amount = number | bigint | BN;
+
+export function toBN(x: Amount, what = "amount"): BN {
+  if (BN.isBN(x)) return x as BN;
+  if (typeof x === "number" && !Number.isSafeInteger(x)) throw new Error(`${what} must be a whole number below 2^53 (got ${x}); pass a bigint or BN`);
+  if (x < 0) throw new Error(`${what} must not be negative (got ${x})`);
+  return new BN(x.toString());
+}
+
+/** Loads a JSON keypair file, warning if other users can read it. */
 export function loadKeypair(path: string) {
+  try {
+    const mode = statSync(path).mode & 0o777;
+    if (mode & 0o077) console.warn(`warning: key file ${path} is readable by other users (mode ${mode.toString(8)}); run: chmod 600 ${path}`);
+  } catch {
+    // readFileSync below reports a missing file
+  }
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(path, "utf8"))));
 }
 
@@ -110,12 +132,12 @@ export class PoaClient {
     return this.program.methods.createAgent(new BN(agentId), name, description, terms)
       .accounts({ operator: this.signer.publicKey, agent, agentVault: agentVaultPda(agent), systemProgram: SYSTEM }).rpc() as Promise<string>;
   }
-  depositCollateral(agent: PublicKey, lamports: number) {
-    return this.program.methods.depositCollateral(new BN(lamports))
+  depositCollateral(agent: PublicKey, lamports: Amount) {
+    return this.program.methods.depositCollateral(toBN(lamports, "lamports"))
       .accounts({ operator: this.signer.publicKey, agent, agentVault: agentVaultPda(agent), systemProgram: SYSTEM }).rpc() as Promise<string>;
   }
-  withdrawCollateral(agent: PublicKey, lamports: number) {
-    return this.program.methods.withdrawCollateral(new BN(lamports))
+  withdrawCollateral(agent: PublicKey, lamports: Amount) {
+    return this.program.methods.withdrawCollateral(toBN(lamports, "lamports"))
       .accounts({ operator: this.signer.publicKey, agent, agentVault: agentVaultPda(agent), systemProgram: SYSTEM }).rpc() as Promise<string>;
   }
   setExecutor(agent: PublicKey, executor: PublicKey) {
@@ -133,8 +155,8 @@ export class PoaClient {
     return this.program.methods.drawFunds()
       .accounts({ executor: this.signer.publicKey, agent, position, positionVault: positionVaultPda(position), systemProgram: SYSTEM }).rpc() as Promise<string>;
   }
-  settlePosition(a: Agent, p: Position, returnedLamports: number) {
-    return this.program.methods.settlePosition(new BN(returnedLamports))
+  settlePosition(a: Agent, p: Position, returnedLamports: Amount) {
+    return this.program.methods.settlePosition(toBN(returnedLamports, "returnedLamports"))
       .accounts({
         executor: this.signer.publicKey, operator: a.operator, agent: a.publicKey, agentVault: agentVaultPda(a.publicKey),
         position: p.publicKey, positionVault: positionVaultPda(p.publicKey), trader: p.trader, systemProgram: SYSTEM,
@@ -142,12 +164,19 @@ export class PoaClient {
   }
 
   // ---- trader (for testing) ----
-  openPosition(agent: PublicKey, lamports: number, durationSecs: number) {
-    const nonce = new BN(Date.now());
+  /** Opens a position under a random u64 nonce, so two opens in the same millisecond cannot collide. */
+  openPosition(agent: PublicKey, lamports: Amount, durationSecs: Amount) {
+    const nonce = new BN(randomBytes(8), "le");
     const position = positionPda(agent, this.signer.publicKey, nonce);
-    return this.program.methods.openPosition(nonce, new BN(lamports), new BN(durationSecs))
+    return this.program.methods.openPosition(nonce, toBN(lamports, "lamports"), toBN(durationSecs, "durationSecs"))
       .accounts({ trader: this.signer.publicKey, agent, position, positionVault: positionVaultPda(position), systemProgram: SYSTEM })
-      .rpc().then((sig: string) => ({ position, sig }));
+      .rpc().then((sig: string) => ({ position, nonce, sig }));
+  }
+  /** Withdraws a position's principal before the agent has drawn it. No fee, no slash. */
+  cancelPosition(agent: PublicKey, position: PublicKey) {
+    return this.program.methods.cancelPosition()
+      .accounts({ trader: this.signer.publicKey, agent, position, positionVault: positionVaultPda(position), systemProgram: SYSTEM })
+      .rpc() as Promise<string>;
   }
   claimDefault(a: Agent, p: Position) {
     return this.program.methods.claimDefault()

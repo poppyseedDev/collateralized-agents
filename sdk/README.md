@@ -71,9 +71,12 @@ into the trading wallet and starts your **hook** command with:
 
 It settles when the hook exits, or at `--hold-min` after drawing, or
 `--buffer-min` before the deadline, whichever comes first. If the hook is
-still running it gets `SIGTERM`, then `SIGKILL` five seconds later. **A missed
-deadline costs you the whole reserved collateral, so the runner never waits
-for the hook.**
+still running, its whole process group (the hook and everything it started)
+gets `SIGTERM`, then up to `--grace-sec` (default 60) to unwind, then
+`SIGKILL`. The grace period is cut short so the hook never runs past the
+deadline less 30 seconds for the settle transaction. The wallet balance is read
+only after every process in the group has exited. **A missed deadline costs
+you the whole reserved collateral, so the runner never waits past that.**
 
 Settlement amount = principal + change in the trading wallet's SOL balance
 since the draw. So:
@@ -82,14 +85,22 @@ since the draw. So:
   position is counted as that position's result (we learned this the hard way:
   leftover USDC from a failed cycle got swept into the next position's profit).
 - **End in SOL.** Tokens still held at settlement are not counted, and the
-  position looks like a loss.
+  position looks like a loss. The runner sends a `warning` event if the wallet
+  holds any non-SOL token balance at settle time.
 - Network fees and token-account rent come out of the result.
 
 One position trades at a time; others wait in the open state. `--paper` runs
 the hook with `POA_PAPER=1` and settles exactly the principal.
-`--notify "cmd"` runs a command on `settled`, `settle-soon`, `adopted` and
-`error` events with `POA_EVENT` and `POA_MESSAGE`. State lives in
-`.poa/state.json`; a restart resumes an open position.
+`--notify "cmd"` runs a command on `settled`, `settle-soon`, `adopted`,
+`warning` and `error` events with `POA_EVENT` and `POA_MESSAGE`. State lives in
+`.poa/state.json`, written atomically with the previous version kept as
+`.poa/state.json.bak`; a restart resumes an open position. If the state file
+does not parse, it is moved aside to `state.json.corrupt-<time>` and the backup
+is used.
+
+`poa keygen` writes the key with mode 600 and refuses to overwrite an existing
+file. Add key files to `.gitignore`. Loading a key file that other users can
+read prints a warning.
 
 ## Example: Hummingbot
 

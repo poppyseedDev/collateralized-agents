@@ -1,8 +1,7 @@
 import { parseArgs } from "node:util";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { BN } from "@coral-xyz/anchor";
-import { writeFileSync } from "node:fs";
-import { LAMPORTS, PoaClient, agentPda, loadKeypair } from "./client.js";
+import { chmodSync, writeFileSync } from "node:fs";
+import { BN, LAMPORTS, PoaClient, agentPda, loadKeypair } from "./client.js";
 import { Runner } from "./runner.js";
 
 const HELP = `poa — operate a Proof of Agent agent from your own server
@@ -16,10 +15,12 @@ const HELP = `poa — operate a Proof of Agent agent from your own server
   poa agent pause|resume --key operator.json --agent <pubkey>
   poa agent status   --agent <pubkey>
 
-  poa run --key trading.json --agent <pubkey> [--hook "cmd"] [--hold-min 15] [--buffer-min 5] [--paper] [--notify "cmd"] [--poll 15]
+  poa run --key trading.json --agent <pubkey> [--hook "cmd"] [--hold-min 15] [--buffer-min 5] [--grace-sec 60]
+          [--paper] [--notify "cmd"] [--poll 15]
 
   poa keygen --out trading.json
-  poa dev open --key trader.json --agent <pubkey> --sol 0.1 --minutes 30     (test helper)
+  poa dev open   --key trader.json --agent <pubkey> --sol 0.1 --minutes 30      (test helper)
+  poa dev cancel --key trader.json --agent <pubkey> --position <pubkey>       (before the agent draws it)
 
 Options: --rpc <url> (default: $POA_RPC_URL or https://api.mainnet-beta.solana.com)
 `;
@@ -40,6 +41,7 @@ const { values: v, positionals } = parseArgs({
     drawdown: { type: "string" }, "min-hours": { type: "string", default: "1" }, "max-days": { type: "string", default: "7" },
     assets: { type: "string", default: "SOL,USDC" }, rules: { type: "string" }, sol: { type: "string" }, "trading-key": { type: "string" },
     hook: { type: "string" }, notify: { type: "string" }, "hold-min": { type: "string", default: "15" }, "buffer-min": { type: "string", default: "5" },
+    "grace-sec": { type: "string", default: "60" }, position: { type: "string" },
     paper: { type: "boolean", default: false }, poll: { type: "string", default: "15" }, minutes: { type: "string", default: "30" },
     out: { type: "string", default: "trading.json" }, state: { type: "string", default: ".poa/state.json" }, help: { type: "boolean", default: false },
   },
@@ -58,8 +60,15 @@ async function main() {
 
   if (group === "keygen") {
     const kp = Keypair.generate();
-    writeFileSync(v.out!, JSON.stringify(Array.from(kp.secretKey)), { mode: 0o600 });
-    console.log(`wrote ${v.out}\npublic key: ${kp.publicKey.toBase58()}`);
+    try {
+      // "wx": never overwrite an existing key file
+      writeFileSync(v.out!, JSON.stringify(Array.from(kp.secretKey)), { mode: 0o600, flag: "wx" });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`${v.out} already exists; not overwriting a key file`);
+      throw e;
+    }
+    chmodSync(v.out!, 0o600); // the mode above is subject to umask
+    console.log(`wrote ${v.out} (mode 600)\npublic key: ${kp.publicKey.toBase58()}\nkeep it out of git: add ${v.out} to your .gitignore`);
     return;
   }
 
@@ -105,6 +114,7 @@ async function main() {
     const runner = new Runner({
       rpcUrl: rpc, agent: pk(need(v.agent, "agent")), tradingKey: loadKeypair(need(v.key, "key")), hook: v.hook, notify: v.notify,
       holdSecs: Math.round(parseFloat(v["hold-min"]!) * 60), bufferSecs: Math.round(parseFloat(v["buffer-min"]!) * 60),
+      graceSecs: Math.round(parseFloat(v["grace-sec"]!)),
       paper: v.paper!, pollMs: parseInt(v.poll!, 10) * 1000, stateFile: v.state!,
     });
     await runner.start();
@@ -115,6 +125,13 @@ async function main() {
     const c = new PoaClient(rpc, loadKeypair(need(v.key, "key")));
     const { position, sig } = await c.openPosition(pk(need(v.agent, "agent")), lamports(need(v.sol, "sol")), Math.round(parseFloat(v.minutes!) * 60));
     console.log(`opened ${position.toBase58()} (${sig.slice(0, 12)}…)`);
+    return;
+  }
+
+  if (group === "dev" && cmd === "cancel") {
+    const c = new PoaClient(rpc, loadKeypair(need(v.key, "key")));
+    const sig = await c.cancelPosition(pk(need(v.agent, "agent")), pk(need(v.position, "position")));
+    console.log(`cancelled (${sig.slice(0, 12)}…)`);
     return;
   }
 

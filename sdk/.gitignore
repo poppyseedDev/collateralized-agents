@@ -1,0 +1,6 @@
+# runner state (poa run --state default)
+.poa/
+# keypairs written by poa keygen with the names used in the docs
+trading.json
+operator.json
+trader.json
