@@ -162,7 +162,11 @@ export const POOLS = [
  * minimum output is taken from that quote, not from a fresh one at send time. 1 to 1000.
  */
 export const SLIPPAGE_BPS = numEnv("SLIPPAGE_BPS", 50, 1, 1_000);
-/** Settle at least this long before a position's deadline. */
-export const SETTLE_BUFFER_SECS = 5 * 60;
+/**
+ * Settle at least this long before a position's deadline. Agents tick one after another
+ * and one agent's tick can take minutes (quotes with retries, swaps confirming), so a
+ * book inside this window settles in the loop's settle pass, before any agent trades.
+ */
+export const SETTLE_BUFFER_SECS = 10 * 60;
 /** Log an ALERT when a book is still unsettled this close to its deadline. */
-export const ALERT_WINDOW_SECS = 10 * 60;
+export const ALERT_WINDOW_SECS = 15 * 60;

@@ -1,6 +1,9 @@
+import { mkdirSync } from "node:fs";
 import { AGENTS, POLL_MS, WATCHDOG_SECS } from "./config.js";
 import { initOrca, mainPrice } from "./orca.js";
 import { AgentRunner, glog, heartbeatNote, msg, refreshClock, tickAll } from "./agent.js";
+import { acquireLock } from "./lock.js";
+import { stateDir } from "./state.js";
 
 const HEARTBEAT_URL = process.env.HEARTBEAT_URL ?? "https://dev.proofofagent.dev/api/heartbeat";
 const HEARTBEAT_SECRET = process.env.HEARTBEAT_SECRET;
@@ -21,6 +24,11 @@ async function heartbeat(agents: string[], note?: string) {
 }
 
 async function main() {
+  // Two runners on one STATE_DIR would trade the same books.
+  mkdirSync(stateDir, { recursive: true });
+  const release = acquireLock(`${stateDir}runner.lock`, undefined, glog);
+  process.on("exit", release); // clean stop, watchdog exit, or a fatal error
+
   await initOrca();
   const only = process.argv.slice(2);
   const runners = AGENTS.filter((a) => !only.length || only.includes(a.id)).map((a) => new AgentRunner(a));

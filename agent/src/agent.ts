@@ -1,6 +1,6 @@
 import { LAMPORTS_PER_SOL, type Keypair, type PublicKey } from "@solana/web3.js";
 import type { KeyPairSigner } from "@solana/kit";
-import { ALERT_WINDOW_SECS, MAIN_POOL, SETTLE_BUFFER_SECS, type AgentConfig } from "./config.js";
+import { ALERT_WINDOW_SECS, MAIN_POOL, POLL_MS, SETTLE_BUFFER_SECS, type AgentConfig } from "./config.js";
 import {
   BN,
   agentPda,
@@ -14,12 +14,13 @@ import {
   positionsForAgent,
   programFor,
   sys,
+  withFallback,
   type Position,
   type Prog,
 } from "./chain.js";
 import { bestQuote, resolveSwap, signerFor, swapExactIn, SwapInFlight, type SwapResult } from "./orca.js";
 import { runnerKeys } from "./keys.js";
-import { loadState, saveState, type AgentState, type Book } from "./state.js";
+import { loadStateFrom, saveState, type AgentState, type Book, type PriceSample } from "./state.js";
 import { arbitrageEdge, arbitrageStep, leg2MinOut, momentumAction, rotateAction } from "./strategies.js";
 
 /** Cluster time minus local time, refreshed at the start of every tick. */
@@ -53,6 +54,10 @@ export const LAST_CALL_SECS = 120;
 export const settleTime = (drawnAt: number, deadline: number, holdSecs: number) =>
   Math.min(deadline - SETTLE_BUFFER_SECS, drawnAt + holdSecs);
 
+/** A book settles once its settle time comes, or once it is inside the settle buffer (books saved with a later settleAt too). */
+export const dueToSettle = (book: Pick<Book, "settleAt" | "deadline">, t: number) =>
+  t >= book.settleAt || t >= book.deadline - SETTLE_BUFFER_SECS;
+
 /** Too close to the deadline to draw and trade safely: the settle buffer plus two minutes. */
 export const tooLateToDraw = (t: number, deadline: number) => t >= deadline - SETTLE_BUFFER_SECS - 120;
 
@@ -62,7 +67,7 @@ export const pastLastCall = (t: number, deadline: number) => t >= deadline - LAS
 /** Whether a book gets an ALERT line: near its deadline and not simply waiting for its scheduled settle. */
 export function shouldAlert(book: Pick<Book, "deadline" | "settleAt" | "pending">, t: number, tickRan: boolean) {
   if (book.deadline - t > ALERT_WINDOW_SECS) return false;
-  if (tickRan && t < book.settleAt && !book.pending) return false;
+  if (tickRan && !dueToSettle(book, t) && !book.pending) return false;
   return true;
 }
 
@@ -79,7 +84,18 @@ export const settleAmount = (owed: bigint, wallet: bigint) => {
   return spendable <= 0n ? 0n : owed < spendable ? owed : spendable;
 };
 
-type SwapOpts ={ pool?: string; minOut?: bigint; bumpCycle?: boolean };
+/**
+ * Price samples older than this are left out of the momentum average, so after downtime
+ * the series starts over instead of mixing in prices from before. Twice the window,
+ * counting each tick as at least a minute since a tick's own work adds to POLL_MS.
+ */
+export const priceMaxAgeSecs = (window: number) => 2 * window * Math.max(POLL_MS / 1000, 60);
+
+/** The prices of the samples no older than priceMaxAgeSecs(window) at `t`, oldest first. */
+export const freshPrices = (samples: PriceSample[], t: number, window: number) =>
+  samples.filter((s) => t - s.at <= priceMaxAgeSecs(window)).map((s) => s.price);
+
+type SwapOpts = { pool?: string; minOut?: bigint; bumpCycle?: boolean };
 
 /** Chain and swap calls the runner makes, replaceable in tests. */
 export type RunnerDeps = {
@@ -87,7 +103,12 @@ export type RunnerDeps = {
   swapExactIn: typeof swapExactIn;
   resolveSwap: typeof resolveSwap;
   balanceOf: typeof balanceOf;
+  recentSignatures: typeof recentSignatures;
 };
+
+/** The trading key's latest transactions, newest first. */
+const recentSignatures = (address: PublicKey, limit: number) =>
+  withFallback("recent signatures", (conn) => conn.getSignaturesForAddress(address, { limit }));
 
 export class AgentRunner {
   /** The bound trading key: draws, swaps, and settles. */
@@ -99,7 +120,9 @@ export class AgentRunner {
   agent: PublicKey;
   signer!: KeyPairSigner;
   state: AgentState;
-  deps: RunnerDeps = { bestQuote, swapExactIn, resolveSwap, balanceOf };
+  /** The state was loaded from `.bak`, which is one save behind. */
+  fromBackup: boolean;
+  deps: RunnerDeps = { bestQuote, swapExactIn, resolveSwap, balanceOf, recentSignatures };
 
   constructor(
     readonly cfg: AgentConfig,
@@ -110,7 +133,7 @@ export class AgentRunner {
     this.program = programFor(this.kp);
     this.fallbackProgram = fallbackConnection ? programFor(this.kp, fallbackConnection) : null;
     this.agent = agentPda(this.operator, cfg.agentId);
-    this.state = loadState(cfg.id);
+    ({ state: this.state, fromBackup: this.fromBackup } = loadStateFrom(cfg.id));
   }
 
   log(...args: unknown[]) {
@@ -129,6 +152,37 @@ export class AgentRunner {
       throw new Error(`${this.cfg.id}: trading key is not bound; run npm run setup`);
     }
     this.log("agent", this.agent.toBase58(), "status", Object.keys(acc.status)[0], "trading key", this.kp.publicKey.toBase58());
+    if (this.fromBackup) await this.checkAfterBackup();
+  }
+
+  /**
+   * The backup is one save behind, so a swap saved as pending in the lost save may have
+   * landed without being booked. Lists the trading key's recent transactions that no book
+   * knows about, for reconciling by hand; it does not book them.
+   */
+  async checkAfterBackup() {
+    const books = Object.entries(this.state.books);
+    this.log(`ALERT state for ${this.cfg.id} was restored from its backup, which is one save behind; ${books.length} open book(s) may be missing a swap`);
+    if (!books.length) return;
+    let recent: Awaited<ReturnType<typeof recentSignatures>>;
+    try {
+      recent = await this.deps.recentSignatures(this.kp.publicKey, 20);
+    } catch (e) {
+      this.log(`ALERT could not list the trading key's recent transactions (${msg(e)}); reconcile ${books.map(([k]) => k).join(", ")} by hand`);
+      return;
+    }
+    const known = new Set(books.flatMap(([, b]) => [...b.trades.map((t) => t.sig), ...(b.pending ? [b.pending.sig] : [])]));
+    for (const [key, book] of books) {
+      const since = Math.max(book.drawnAt, ...book.trades.map((t) => t.at));
+      const unknown = recent.filter((s) => !s.err && !known.has(s.signature) && (s.blockTime == null || s.blockTime > since));
+      if (!unknown.length) continue;
+      // Draws and settles of other positions show up here too; only swaps belong in a book.
+      this.log(
+        `ALERT ${key} needs manual reconciliation: ${unknown.length} transaction(s) from the trading key since its last booked trade are in no book;`,
+        "check whether any is a swap for this position:",
+        unknown.map((s) => s.signature).join(", "),
+      );
+    }
   }
 
   /**
@@ -138,10 +192,32 @@ export class AgentRunner {
    */
   async tick(price: number | null, positions: Position[], partial = false) {
     if (price !== null) {
-      this.state.prices = [...this.state.prices, price].slice(-100);
+      this.state.prices = [...this.state.prices, { at: now(), price }].slice(-100);
     }
 
     // Existing books first, so a failed draw can never hold up a due settle.
+    await this.runBooks(positions, price);
+
+    if (!partial) {
+      for (const p of positions) {
+        const key = p.publicKey.toBase58();
+        try {
+          if (p.status === "open") await this.maybeDraw(p);
+          else if (p.status === "trading" && !this.state.books[key]) this.adoptOrphan(p);
+        } catch (e) {
+          this.log("could not draw or adopt", key, msg(e));
+        }
+      }
+    }
+  }
+
+  /** Settles the books that are due and nothing else: the loop runs this for every agent before any agent trades. */
+  async settleDue(positions: Position[]) {
+    await this.runBooks(positions, null, true);
+  }
+
+  /** Settles each book that is due and, unless `settleOnly`, trades the others. */
+  private async runBooks(positions: Position[], price: number | null, settleOnly = false) {
     for (const [key, book] of Object.entries(this.state.books)) {
       const p = positions.find((x) => x.publicKey.toBase58() === key);
       if (!p || p.status !== "trading") {
@@ -150,6 +226,7 @@ export class AgentRunner {
         this.save();
         continue;
       }
+      if (settleOnly && !dueToSettle(book, now())) continue;
       try {
         const pendingSig = book.pending?.sig;
         let resolved = true;
@@ -166,25 +243,13 @@ export class AgentRunner {
           if (!pastLastCall(now(), book.deadline)) continue; // resolve it next tick
           this.log(`ALERT swap ${pendingSig} on ${key.slice(0, 8)} is still unresolved ${book.deadline - now()}s before the deadline; settling with the book as it stands`);
           await this.settle(p, book, true);
-        } else if (now() >= book.settleAt) await this.settle(p, book);
-        else await this.trade(key, book, price);
+        } else if (dueToSettle(book, now())) await this.settle(p, book);
+        else if (!settleOnly) await this.trade(key, book, price);
       } catch (e) {
         if (e instanceof SwapInFlight) this.log("swap in flight on", key.slice(0, 8), "-", msg(e), "- will resolve next tick");
         else this.log("error on", key, msg(e));
       }
       this.save();
-    }
-
-    if (!partial) {
-      for (const p of positions) {
-        const key = p.publicKey.toBase58();
-        try {
-          if (p.status === "open") await this.maybeDraw(p);
-          else if (p.status === "trading" && !this.state.books[key]) this.adoptOrphan(p);
-        } catch (e) {
-          this.log("could not draw or adopt", key, msg(e));
-        }
-      }
     }
   }
 
@@ -345,7 +410,7 @@ export class AgentRunner {
     }
 
     if (s.kind === "momentum") {
-      const a = momentumAction(s, this.state.prices, price, { sol, usdc });
+      const a = momentumAction(s, freshPrices(this.state.prices, now(), s.window), price, { sol, usdc });
       if (a) {
         this.log(a.note);
         await this.swap(book, a.side, a.amount, a.bumpCycle ? { bumpCycle: true } : {});
@@ -438,7 +503,9 @@ export type ScanDeps = { positionsForAgent: typeof positionsForAgent; positionsB
 /**
  * Ticks every runner once. Each agent gets its own filtered scan, so one failure does not
  * hold up the others; if it fails, the positions already in the books are fetched directly
- * and the tick runs as `partial` (no draws). Returns the agents whose tick ran.
+ * and the tick runs as `partial` (no draws). Books that are due settle across all agents
+ * first, so one agent's slow trades cannot push another's book past its deadline.
+ * Returns the agents whose tick ran.
  */
 export async function tickAll(
   runners: AgentRunner[],
@@ -447,6 +514,7 @@ export async function tickAll(
 ): Promise<{ ran: string[]; degraded: string[] }> {
   const ran: string[] = [];
   const degraded: string[] = [];
+  const scans: { r: AgentRunner; positions: Position[] | null; partial: boolean }[] = [];
   for (const r of runners) {
     let positions: Position[] | null = null;
     let partial = false;
@@ -464,6 +532,19 @@ export async function tickAll(
         r.log("fetching tracked positions failed too:", msg(e2));
       }
     }
+    scans.push({ r, positions, partial });
+  }
+
+  for (const { r, positions } of scans) {
+    if (!positions) continue;
+    try {
+      await r.settleDue(positions);
+    } catch (e) {
+      r.log("settle pass failed:", msg(e));
+    }
+  }
+
+  for (const { r, positions, partial } of scans) {
     let ok = false;
     if (positions) {
       try {

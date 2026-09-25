@@ -6,15 +6,19 @@ import type { KeyPairSigner } from "@solana/kit";
 import { AGENTS, MAIN_POOL, type Strategy } from "../src/config.js";
 import { BN, type Position, type PositionStatus } from "../src/chain.js";
 import { SwapInFlight, SwapRejected, type Quote, type Resolution, type Signed, type SwapResult } from "../src/orca.js";
-import { loadState, type Book, type PendingSwap } from "../src/state.js";
+import { loadState, saveState, stateDir, type AgentState, type Book, type PendingSwap } from "../src/state.js";
+import { writeFileSync } from "node:fs";
 import {
   AgentRunner,
   LAST_CALL_SECS,
   SETTLE_RESERVE_LAMPORTS,
   clock,
+  dueToSettle,
+  freshPrices,
   heartbeatNote,
   now,
   pastLastCall,
+  priceMaxAgeSecs,
   refreshClock,
   settleAmount,
   settleTime,
@@ -155,16 +159,24 @@ describe("clock", () => {
 // ---------- pure timing rules ----------
 
 describe("timing rules", () => {
-  test("settle time: hold time after drawing, capped at 5 minutes before the deadline", () => {
+  test("settle time: hold time after drawing, capped at 10 minutes before the deadline", () => {
     assert.equal(settleTime(T, T + 3600, 600), T + 600);
-    assert.equal(settleTime(T, T + 800, 600), T + 500);
-    assert.equal(settleTime(T, T + 900, 600), T + 600);
+    assert.equal(settleTime(T, T + 1100, 600), T + 500);
+    assert.equal(settleTime(T, T + 1200, 600), T + 600);
   });
 
-  test("draw guard: no draws from 7 minutes before the deadline", () => {
-    assert.equal(tooLateToDraw(T, T + 7 * 60), true);
-    assert.equal(tooLateToDraw(T, T + 7 * 60 - 1), true);
-    assert.equal(tooLateToDraw(T, T + 7 * 60 + 1), false);
+  test("due to settle: at its settle time, or inside the 10-minute buffer whatever its settleAt", () => {
+    assert.equal(dueToSettle({ settleAt: T, deadline: T + 3600 }, T), true);
+    assert.equal(dueToSettle({ settleAt: T + 1, deadline: T + 3600 }, T), false);
+    // a book saved under the old 5-minute buffer
+    assert.equal(dueToSettle({ settleAt: T + 300, deadline: T + 600 }, T), true);
+    assert.equal(dueToSettle({ settleAt: T + 300, deadline: T + 601 }, T), false);
+  });
+
+  test("draw guard: no draws from 12 minutes before the deadline", () => {
+    assert.equal(tooLateToDraw(T, T + 12 * 60), true);
+    assert.equal(tooLateToDraw(T, T + 12 * 60 - 1), true);
+    assert.equal(tooLateToDraw(T, T + 12 * 60 + 1), false);
   });
 
   test("last call is 2 minutes before the deadline", () => {
@@ -173,15 +185,19 @@ describe("timing rules", () => {
     assert.equal(pastLastCall(T, T + 121), false);
   });
 
-  test("ALERT only within 10 minutes of the deadline", () => {
-    const b = { deadline: T + 601, settleAt: T + 1000, pending: null };
+  test("ALERT only within 15 minutes of the deadline", () => {
+    const b = { deadline: T + 901, settleAt: T + 1000, pending: null };
     assert.equal(shouldAlert(b, T, false), false);
     assert.equal(shouldAlert({ ...b, pending: pend() }, T, true), false);
-    assert.equal(shouldAlert({ ...b, deadline: T + 600, settleAt: T }, T, true), true);
+    assert.equal(shouldAlert({ ...b, deadline: T + 900, settleAt: T }, T, true), true);
   });
 
   test("ALERT: a book waiting for its scheduled settle is quiet", () => {
-    assert.equal(shouldAlert({ deadline: T + 400, settleAt: T + 100, pending: null }, T, true), false);
+    assert.equal(shouldAlert({ deadline: T + 800, settleAt: T + 100, pending: null }, T, true), false);
+  });
+
+  test("ALERT: inside the settle buffer, even before its settleAt", () => {
+    assert.equal(shouldAlert({ deadline: T + 500, settleAt: T + 200, pending: null }, T, true), true);
   });
 
   test("ALERT: a stuck pending swap near the deadline", () => {
@@ -231,9 +247,9 @@ describe("drawing", () => {
     assert.equal(p.status, "trading");
   });
 
-  test("does not draw 7 minutes or less before the deadline", async () => {
+  test("does not draw 12 minutes or less before the deadline", async () => {
     const { r, calls } = makeRunner(rotate);
-    const p = position(r, "open", T + 420);
+    const p = position(r, "open", T + 720);
     await r.tick(150, [p]);
     assert.equal(calls.draw, 0);
     assert.deepEqual(r.state.books, {});
@@ -241,15 +257,15 @@ describe("drawing", () => {
 
   test("the draw guard uses chain time, not local time", async () => {
     const { r, calls } = makeRunner(rotate);
-    const p = position(r, "open", T + 500); // local: 500s left, drawable
-    await refreshClock(async () => T + 100); // chain: 400s left, too late
+    const p = position(r, "open", T + 800); // local: 800s left, drawable
+    await refreshClock(async () => T + 100); // chain: 700s left, too late
     await r.tick(150, [p]);
     assert.equal(calls.draw, 0);
   });
 
-  test("a near-deadline draw settles 5 minutes before the deadline", async () => {
+  test("a near-deadline draw settles 10 minutes before the deadline", async () => {
     const { r, calls } = makeRunner({ kind: "rotate", sizeBps: 0 }, 3600);
-    const p = position(r, "open", T + 900);
+    const p = position(r, "open", T + 1200);
     await r.tick(150, [p]);
     assert.equal(calls.draw, 1);
     assert.equal(r.state.books[p.publicKey.toBase58()].settleAt, T + 600);
@@ -674,25 +690,140 @@ describe("momentum in the runner", () => {
     const { r, deps } = makeRunner({ kind: "momentum", window: 3, bandBps: 30, sizeBps: 6000 });
     const p = position(r, "trading", T + 3600);
     addBook(r, p);
-    r.state.prices = [150, 150];
+    const old = [
+      { at: T - 60, price: 150 },
+      { at: T - 30, price: 150 },
+    ];
+    r.state.prices = [...old];
     await r.tick(null, [p]);
-    assert.deepEqual(r.state.prices, [150, 150]);
+    assert.deepEqual(r.state.prices, old);
     assert.equal(deps.bestQuote.mock.callCount(), 0);
 
     deps.bestQuote.mock.mockImplementation(async (side, amount) => ({ pool: "PoolQ", mintIn: side, amountIn: amount, out: 1n, minOut: 1n }));
     deps.swapExactIn.mock.mockImplementation(lands(-600_000_000n, 84_000_000n));
     await r.tick(140, [p]);
-    assert.deepEqual(r.state.prices, [150, 150, 140]);
+    assert.deepEqual(r.state.prices, [...old, { at: T, price: 140 }]);
     assert.deepEqual(deps.bestQuote.mock.calls[0].arguments.slice(0, 2), ["SOL", 600_000_000n]);
   });
 
   test("the price series keeps the last 100 samples", async () => {
     const { r } = makeRunner({ kind: "rotate", sizeBps: 0 });
-    r.state.prices = Array.from({ length: 100 }, (_, i) => i);
+    r.state.prices = Array.from({ length: 100 }, (_, i) => ({ at: T - 100 + i, price: i }));
     await r.tick(1000, []);
     assert.equal(r.state.prices.length, 100);
-    assert.equal(r.state.prices[0], 1);
-    assert.equal(r.state.prices[99], 1000);
+    assert.equal(r.state.prices[0].price, 1);
+    assert.deepEqual(r.state.prices[99], { at: T, price: 1000 });
+  });
+
+  test("samples older than the max age are left out of the average", () => {
+    const max = priceMaxAgeSecs(10);
+    assert.equal(max, 2 * 10 * 60); // POLL_MS 30 s counts as a minute
+    const samples = [
+      { at: T - max - 1, price: 100 },
+      { at: T - max, price: 101 },
+      { at: T, price: 102 },
+    ];
+    assert.deepEqual(freshPrices(samples, T, 10), [101, 102]);
+  });
+
+  test("after downtime, old samples do not count toward the window: no trade until it refills", async () => {
+    const { r, deps } = makeRunner({ kind: "momentum", window: 3, bandBps: 30, sizeBps: 6000 });
+    const p = position(r, "trading", T + 3600);
+    addBook(r, p);
+    // two hours-old samples at 150 and a price now at 140 would be a sell signal
+    r.state.prices = [
+      { at: T - 7200, price: 150 },
+      { at: T - 7170, price: 150 },
+    ];
+    await r.tick(140, [p]);
+    assert.equal(deps.bestQuote.mock.callCount(), 0);
+  });
+
+  test("migrated samples (at 0) are stale", async () => {
+    const { r, deps } = makeRunner({ kind: "momentum", window: 3, bandBps: 30, sizeBps: 6000 });
+    const p = position(r, "trading", T + 3600);
+    addBook(r, p);
+    r.state.prices = [
+      { at: 0, price: 150 },
+      { at: 0, price: 150 },
+    ];
+    await r.tick(140, [p]);
+    assert.equal(deps.bestQuote.mock.callCount(), 0);
+  });
+});
+
+// ---------- recovery from the .bak ----------
+
+describe("state restored from its backup", () => {
+  type Sig = { signature: string; blockTime: number | null; err: unknown; slot: number };
+  const sig = (signature: string, blockTime: number | null, err: unknown = null): Sig => ({ signature, blockTime, err, slot: 1 });
+
+  /** A runner whose state file is torn, so it loads `.bak` (holding `bak`). */
+  function restoredRunner(bak: AgentState) {
+    const { r } = makeRunner(rotate);
+    const err = mock.method(console, "error", () => {});
+    saveState(r.cfg.id, bak);
+    saveState(r.cfg.id, bak); // .bak now holds it too
+    writeFileSync(`${stateDir}${r.cfg.id}.json`, "{ torn");
+    const restored = new AgentRunner(r.cfg, { operator: r.operator, executor: r.kp });
+    err.mock.restore();
+    restored.deps = r.deps;
+    return restored;
+  }
+
+  const bookWith = (over: Partial<Book> = {}): Book => ({
+    principal: SOL.toString(),
+    sol: (SOL / 2n).toString(),
+    usdc: "75000000",
+    drawnAt: T - 600,
+    settleAt: T + 600,
+    deadline: T + 3600,
+    cycles: 1,
+    trades: [{ at: T - 500, side: "SOL->USDC", in: (SOL / 2n).toString(), out: "75000000", pool: "PoolA", sig: "known1" }],
+    ...over,
+  });
+
+  test("a fresh runner is not flagged; a restored one is", () => {
+    const { r } = makeRunner(rotate);
+    assert.equal(r.fromBackup, false);
+    assert.equal(restoredRunner({ books: {}, prices: [], history: [] }).fromBackup, true);
+  });
+
+  test("logs an ALERT and lists newer transactions that no book has", async () => {
+    const r = restoredRunner({ books: { posA: bookWith(), posB: bookWith({ trades: [], drawnAt: T - 100 }) }, prices: [], history: [] });
+    const recent = mock.fn(async (_a: PublicKey, _limit: number) => [
+      sig("lost1", T - 200), // after posA's last trade, before posB's draw
+      sig("known1", T - 501),
+      sig("failed1", T - 50, { InstructionError: [0, "Custom"] }),
+      sig("draw0", T - 700),
+    ]);
+    (r.deps as unknown as { recentSignatures: typeof recent }).recentSignatures = recent;
+    lines = [];
+    await r.checkAfterBackup();
+    assert.equal(recent.mock.calls[0].arguments[1], 20);
+    assert.ok(lines.some((l) => l.includes(`[${r.cfg.id}] ALERT state for ${r.cfg.id} was restored from its backup`)));
+    const flagged = lines.filter((l) => l.includes("needs manual reconciliation"));
+    assert.equal(flagged.length, 1);
+    assert.match(flagged[0], /ALERT posA needs manual reconciliation: 1 transaction/);
+    assert.match(flagged[0], /lost1$/);
+  });
+
+  test("nothing unknown: only the restore ALERT", async () => {
+    const r = restoredRunner({ books: { posA: bookWith() }, prices: [], history: [] });
+    (r.deps as unknown as { recentSignatures: unknown }).recentSignatures = async () => [sig("known1", T - 501)];
+    lines = [];
+    await r.checkAfterBackup();
+    assert.equal(lines.filter((l) => l.includes("ALERT")).length, 1);
+  });
+
+  test("an RPC failure listing transactions asks for a manual check instead of throwing", async () => {
+    const r = restoredRunner({ books: { posA: bookWith() }, prices: [], history: [] });
+    (r.deps as unknown as { recentSignatures: unknown }).recentSignatures = async () => {
+      throw new Error("fetch failed");
+    };
+    lines = [];
+    await r.checkAfterBackup();
+    assert.ok(lines.some((l) => l.includes("ALERT could not list the trading key's recent transactions (fetch failed); reconcile posA by hand")));
   });
 });
 
@@ -754,6 +885,60 @@ describe("tickAll", () => {
     assert.equal(heartbeatNote(out.degraded), `degraded, position scan failed: ${c.r.cfg.id}`);
     // b's tick did not run and its book is near the deadline
     assert.ok(lines.some((l) => l.includes(`ALERT [${b.r.cfg.id}]`) && l.includes("this tick could not run")));
+  });
+
+  test("a slow trade on one agent does not delay another agent's due settle", async () => {
+    const events: string[] = [];
+    const a = makeRunner(rotate);
+    const ap = position(a.r, "trading", T + 7200);
+    addBook(a.r, ap); // not due: trades this tick
+    a.deps.bestQuote.mock.mockImplementation(async (side, amount) => {
+      events.push("A quote");
+      mock.timers.tick(8 * 60 * 1000); // quotes retried and backed off for 8 minutes
+      return { pool: "PoolA", mintIn: side, amountIn: amount, out: 1n, minOut: 1n };
+    });
+    a.deps.swapExactIn.mock.mockImplementation(lands(-SOL / 2n, 75_000_000n));
+
+    const b = makeRunner(rotate);
+    const bp = position(b.r, "trading", T + 3600);
+    addBook(b.r, bp, { settleAt: T, cycles: 1 });
+    b.r.program = fakeProgram(b.calls, "settle", async () => (events.push(`B settle at ${now()}`), "settleSig"));
+
+    const io = {
+      positionsForAgent: async (agent: PublicKey) => (agent.equals(a.r.agent) ? [ap] : [bp]),
+      positionsByKey: unexpected("positionsByKey"),
+    };
+    const out = await tickAll([a.r, b.r], 150, io);
+    assert.deepEqual(events, [`B settle at ${T}`, "A quote"]);
+    assert.deepEqual(b.calls.settle, [SOL.toString()]);
+    assert.equal(a.r.state.books[ap.publicKey.toBase58()].cycles, 1, "A still traded");
+    assert.deepEqual(out.ran, [a.r.agent.toBase58(), b.r.agent.toBase58()]);
+  });
+
+  test("the settle pass also settles a book inside the settle buffer before its settleAt, and trades nothing", async () => {
+    const a = makeRunner(rotate); // bestQuote and swapExactIn throw if called
+    const ap = position(a.r, "trading", T + 7200);
+    addBook(a.r, ap, { cycles: 0 });
+    const b = makeRunner(rotate);
+    const bp = position(b.r, "trading", T + 500);
+    addBook(b.r, bp, { settleAt: T + 200 }); // saved under the old 5-minute buffer
+    for (const x of [a, b]) {
+      // stop after the settle pass: the trade pass would call bestQuote for A
+      x.r.tick = async () => {};
+    }
+    await tickAll([a.r, b.r], 150, { positionsForAgent: async (ag: PublicKey) => (ag.equals(a.r.agent) ? [ap] : [bp]), positionsByKey: unexpected("positionsByKey") });
+    assert.deepEqual(b.calls.settle, [SOL.toString()]);
+    assert.equal(a.deps.bestQuote.mock.callCount(), 0);
+    assert.ok(a.r.state.books[ap.publicKey.toBase58()]);
+  });
+
+  test("a book inside the settle buffer settles instead of opening a trade", async () => {
+    const { r, calls, deps } = makeRunner(rotate);
+    const p = position(r, "trading", T + 590);
+    addBook(r, p, { settleAt: T + 290, cycles: 0 });
+    await r.tick(150, [p]);
+    assert.equal(deps.bestQuote.mock.callCount(), 0);
+    assert.deepEqual(calls.settle, [SOL.toString()]);
   });
 
   test("no heartbeat note when every scan worked", () => {

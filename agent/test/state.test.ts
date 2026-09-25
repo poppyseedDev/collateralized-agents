@@ -3,7 +3,7 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadState, saveState, writeAtomic, type AgentState } from "../src/state.js";
+import { loadState, loadStateFrom, saveState, writeAtomic, type AgentState } from "../src/state.js";
 
 const quiet = () => mock.method(console, "error", () => {});
 const file = (id: string) => join(STATE_DIR, `${id}.json`);
@@ -21,7 +21,10 @@ const sample = (n: number): AgentState => ({
       trades: [],
     },
   },
-  prices: [150.5, 151],
+  prices: [
+    { at: 100, price: 150.5 },
+    { at: 130, price: 151 },
+  ],
   history: [],
 });
 
@@ -116,6 +119,27 @@ test("a corrupt state file without a .bak falls back to empty", () => {
 });
 
 test("missing top-level fields are filled with defaults", () => {
-  writeFileSync(file("partial"), JSON.stringify({ prices: [1, 2] }));
-  assert.deepEqual(loadState("partial"), { books: {}, prices: [1, 2], history: [] });
+  writeFileSync(file("partial"), JSON.stringify({ prices: [{ at: 5, price: 1 }] }));
+  assert.deepEqual(loadState("partial"), { books: {}, prices: [{ at: 5, price: 1 }], history: [] });
+});
+
+test("price samples saved as plain numbers load as stale samples (at 0)", () => {
+  writeFileSync(file("oldprices"), JSON.stringify({ books: {}, prices: [150, 151.5], history: [] }));
+  assert.deepEqual(loadState("oldprices").prices, [
+    { at: 0, price: 150 },
+    { at: 0, price: 151.5 },
+  ]);
+});
+
+test("loadStateFrom says whether the state came from the backup", () => {
+  const err = quiet();
+  saveState("src", sample(1));
+  assert.equal(loadStateFrom("src").fromBackup, false);
+  saveState("src", sample(2));
+  writeFileSync(file("src"), "{ torn");
+  const out = loadStateFrom("src");
+  err.mock.restore();
+  assert.equal(out.fromBackup, true);
+  assert.deepEqual(out.state, sample(1));
+  assert.equal(loadStateFrom("src-missing").fromBackup, false);
 });

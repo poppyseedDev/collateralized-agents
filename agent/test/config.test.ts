@@ -81,8 +81,9 @@ test("numeric env bounds are inclusive", async () => {
 });
 
 test("constants the runner's timing relies on", () => {
-  assert.equal(config.SETTLE_BUFFER_SECS, 5 * 60);
-  assert.equal(config.ALERT_WINDOW_SECS, 10 * 60);
+  assert.equal(config.SETTLE_BUFFER_SECS, 10 * 60);
+  assert.equal(config.ALERT_WINDOW_SECS, 15 * 60);
+  assert.ok(config.ALERT_WINDOW_SECS > config.SETTLE_BUFFER_SECS);
   assert.ok(config.POOLS.includes(config.MAIN_POOL));
 });
 

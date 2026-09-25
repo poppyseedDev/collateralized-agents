@@ -1,7 +1,7 @@
 import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const dir = process.env.STATE_DIR
+export const stateDir = process.env.STATE_DIR
   ? `${process.env.STATE_DIR.replace(/\/$/, "")}/`
   : fileURLToPath(new URL("../state/", import.meta.url));
 
@@ -34,27 +34,38 @@ export type Book = {
   pending?: PendingSwap | null;
 };
 
+/** A main-pool price and when it was read (cluster seconds). */
+export type PriceSample = { at: number; price: number };
+
 export type AgentState = {
   books: Record<string, Book>;
-  prices: number[];
+  prices: PriceSample[];
   history: { position: string; principal: string; returned: string; at: number }[];
 };
 
 const empty = (): AgentState => ({ books: {}, prices: [], history: [] });
 
-const parse = (path: string): AgentState => ({ ...empty(), ...JSON.parse(readFileSync(path, "utf8")) });
+function parse(path: string): AgentState {
+  const s: AgentState = { ...empty(), ...JSON.parse(readFileSync(path, "utf8")) };
+  // Samples saved before they carried a time are plain numbers: load them as stale.
+  s.prices = s.prices.map((p: PriceSample | number) => (typeof p === "number" ? { at: 0, price: p } : p));
+  return s;
+}
+
+export const loadState = (id: string): AgentState => loadStateFrom(id).state;
 
 /**
  * Loads an agent's state. A file that does not parse is moved aside to
  * `<id>.json.corrupt-<ts>` and the last good copy (`<id>.json.bak`) is used
- * instead, so a bad write cannot crash-loop the runner.
+ * instead, so a bad write cannot crash-loop the runner. `fromBackup` says the
+ * backup was used: it is one save behind, so it can miss a swap.
  */
-export function loadState(id: string): AgentState {
-  const path = `${dir}${id}.json`;
+export function loadStateFrom(id: string): { state: AgentState; fromBackup: boolean } {
+  const path = `${stateDir}${id}.json`;
   const bak = `${path}.bak`;
-  if (!existsSync(path)) return empty();
+  if (!existsSync(path)) return { state: empty(), fromBackup: false };
   try {
-    return parse(path);
+    return { state: parse(path), fromBackup: false };
   } catch (e) {
     const aside = `${path}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
     renameSync(path, aside);
@@ -63,13 +74,13 @@ export function loadState(id: string): AgentState {
       try {
         const s = parse(bak);
         console.error(`ALERT [${id}] resuming from backup ${bak}; books may miss the last few changes, check the wallet`);
-        return s;
+        return { state: s, fromBackup: true };
       } catch (e2) {
         console.error(`ALERT [${id}] backup ${bak} did not parse either (${(e2 as Error).message})`);
       }
     }
     console.error(`ALERT [${id}] starting with empty books; trading positions will be re-adopted from chain`);
-    return empty();
+    return { state: empty(), fromBackup: false };
   }
 }
 
@@ -88,6 +99,6 @@ export function writeAtomic(path: string, data: string) {
 }
 
 export function saveState(id: string, s: AgentState) {
-  mkdirSync(dir, { recursive: true });
-  writeAtomic(`${dir}${id}.json`, JSON.stringify(s, null, 2));
+  mkdirSync(stateDir, { recursive: true });
+  writeAtomic(`${stateDir}${id}.json`, JSON.stringify(s, null, 2));
 }

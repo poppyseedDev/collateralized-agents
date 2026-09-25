@@ -84,7 +84,10 @@ fly deploy . --config agent/fly.toml
 fly logs --app poa-agent-runner
 ```
 
-Run only one runner at a time: before the Fly machine starts, stop the launchd job
+Run only one runner at a time. The runner takes `runner.lock` in `STATE_DIR` at
+startup and refuses to start while another live runner holds it; a lock left by a
+crashed runner (dead pid, earlier boot, or another machine) is taken over with a
+log line. The lock only covers one `STATE_DIR`, so before the Fly machine starts, stop the launchd job
 (`launchctl bootout gui/$(id -u)/dev.proofofagent.agent-runner`) and copy
 `state/*.json` to the volume (`fly ssh sftp shell --app poa-agent-runner`, then
 `put state/orca-arb.json /data/orca-arb.json` and so on).
@@ -104,6 +107,7 @@ Three layers keep settlement alive:
 - Pool addresses are listed in `src/config.ts` to avoid a program-wide scan. Pools that lose liquidity are skipped.
 - Every swap is signed and saved in the book as `pending` (signature and last valid block height) before it is sent. If its confirmation is lost, the next tick looks it up and books what actually happened, or drops it once its blockhash has expired. A swap still unresolved two minutes before the deadline is settled with the book as it stands, and logged as an `ALERT`.
 - Each agent's positions are read with a scan filtered on that agent. If the scan fails, the runner fetches the positions already in its books by address so they still settle, but it does not draw new ones until the scan works again. The heartbeat lists only agents whose tick ran.
-- A book still unsettled within ten minutes of its deadline, when it should already have settled or its tick could not run, is logged as an `ALERT` line on every tick. There is no other notification channel yet.
-- State files are written atomically, keeping the previous version as `<id>.json.bak`. A file that does not parse is moved to `<id>.json.corrupt-<time>` and the backup is loaded.
-- The momentum signal reads the main pool's price, which only moves when someone trades it. On devnet it often stays flat, so the momentum agent may never trade.
+- Books settle at their hold time, and never later than ten minutes before the deadline. Each loop first settles every due book across all agents, then trades and draws, so one agent's slow quotes or swaps cannot push another agent's book past its deadline. No trade is opened inside those ten minutes, and nothing is drawn within twelve.
+- A book still unsettled within fifteen minutes of its deadline, when it should already have settled, has a swap unresolved, or its tick could not run, is logged as an `ALERT` line on every tick. There is no other notification channel yet.
+- State files are written atomically, keeping the previous version as `<id>.json.bak`. A file that does not parse is moved to `<id>.json.corrupt-<time>` and the backup is loaded. The backup is one save behind, so it can miss a swap that landed: the runner logs an `ALERT` at startup and lists the trading key's recent transactions that no book knows about. It does not book them; reconcile those by hand.
+- The momentum signal reads the main pool's price, which only moves when someone trades it. On devnet it often stays flat, so the momentum agent may never trade. Samples older than twice the window (at least a minute per sample) are ignored, so after downtime the average starts over.
