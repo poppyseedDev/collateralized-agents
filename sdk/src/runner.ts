@@ -51,7 +51,12 @@ const now = () => Math.floor(Date.now() / 1000);
 const sol = (n: bigint | number | string) => (Number(n) / LAMPORTS).toFixed(4);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Seconds kept free before the deadline for the settle transaction itself. */
-const SETTLE_TX_SECS = 30;
+export const SETTLE_TX_SECS = 30;
+
+/** How long the hook may unwind after SIGTERM: `graceSecs` (default 60), cut so it ends SETTLE_TX_SECS before the deadline, never negative. */
+export function hookGraceSecs(graceSecs: number | undefined, deadline: number, nowSecs: number) {
+  return Math.max(0, Math.min(graceSecs ?? 60, deadline - SETTLE_TX_SECS - nowSecs));
+}
 const TOKEN_PROGRAMS = [
   new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
@@ -76,7 +81,7 @@ function signalGroup(pgid: number, sig: NodeJS.Signals) {
 }
 
 /** Writes to a temp file, fsyncs, keeps the previous version as `.bak`, then renames over the original. */
-function writeAtomic(path: string, data: string) {
+export function writeAtomic(path: string, data: string) {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}`;
   const fd = openSync(tmp, "w", 0o600);
@@ -94,7 +99,7 @@ function writeAtomic(path: string, data: string) {
  * Loads the runner state. A file that does not parse is moved aside to
  * `<file>.corrupt-<ts>` and the backup is used, so a bad write cannot crash-loop the runner.
  */
-function loadRunnerState(path: string, log: (m: string) => void): State {
+export function loadRunnerState(path: string, log: (m: string) => void): State {
   const empty: State = { active: null, history: [] };
   if (!existsSync(path)) return empty;
   try {
@@ -261,7 +266,7 @@ export class Runner {
     if (!hook?.pid) return;
     const pgid = hook.pid;
     if (!groupAlive(pgid)) return;
-    const grace = Math.max(0, Math.min(this.opts.graceSecs ?? 60, deadline - SETTLE_TX_SECS - now()));
+    const grace = hookGraceSecs(this.opts.graceSecs, deadline, now());
     this.log(`hook still running at settle time; sending SIGTERM to its process group, ${grace}s to finish`);
     signalGroup(pgid, "SIGTERM");
     const until = Date.now() + grace * 1000;

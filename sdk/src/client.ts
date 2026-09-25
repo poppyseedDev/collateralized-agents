@@ -82,7 +82,11 @@ const enumKey = <T extends string>(v: object) => Object.keys(v)[0] as T;
 export type Amount = number | bigint | BN;
 
 export function toBN(x: Amount, what = "amount"): BN {
-  if (BN.isBN(x)) return x as BN;
+  if (BN.isBN(x)) {
+    // borsh encodes a negative BN as its absolute value, so -5 would silently become 5
+    if ((x as BN).isNeg()) throw new Error(`${what} must not be negative (got ${x.toString()})`);
+    return x as BN;
+  }
   if (typeof x === "number" && !Number.isSafeInteger(x)) throw new Error(`${what} must be a whole number below 2^53 (got ${x}); pass a bigint or BN`);
   if (x < 0) throw new Error(`${what} must not be negative (got ${x})`);
   return new BN(x.toString());

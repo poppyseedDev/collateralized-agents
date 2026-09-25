@@ -1,8 +1,8 @@
-import { parseArgs } from "node:util";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { chmodSync, writeFileSync } from "node:fs";
 import { BN, LAMPORTS, PoaClient, agentPda, loadKeypair } from "./client.js";
 import { Runner } from "./runner.js";
+import { parseCli, runnerTiming } from "./args.js";
 
 const HELP = `poa — operate a Proof of Agent agent from your own server
 
@@ -33,19 +33,7 @@ const ASSETS: Record<string, string> = {
   DEVUSDC: "BRjpCHtyQLNCo8gqRUr8jtdAj5AjPYQaoqbvcZiHok1k",
 };
 
-const { values: v, positionals } = parseArgs({
-  allowPositionals: true,
-  options: {
-    rpc: { type: "string" }, key: { type: "string" }, agent: { type: "string" }, id: { type: "string", default: "1" },
-    name: { type: "string" }, description: { type: "string", default: "" }, ratio: { type: "string" }, fee: { type: "string" },
-    drawdown: { type: "string" }, "min-hours": { type: "string", default: "1" }, "max-days": { type: "string", default: "7" },
-    assets: { type: "string", default: "SOL,USDC" }, rules: { type: "string" }, sol: { type: "string" }, "trading-key": { type: "string" },
-    hook: { type: "string" }, notify: { type: "string" }, "hold-min": { type: "string", default: "15" }, "buffer-min": { type: "string", default: "5" },
-    "grace-sec": { type: "string", default: "60" }, position: { type: "string" },
-    paper: { type: "boolean", default: false }, poll: { type: "string", default: "15" }, minutes: { type: "string", default: "30" },
-    out: { type: "string", default: "trading.json" }, state: { type: "string", default: ".poa/state.json" }, help: { type: "boolean", default: false },
-  },
-});
+const { values: v, positionals } = parseCli();
 
 const rpc = v.rpc ?? process.env.POA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const need = (x: string | undefined, name: string) => { if (!x) throw new Error(`--${name} is required`); return x; };
@@ -113,9 +101,7 @@ async function main() {
   if (group === "run") {
     const runner = new Runner({
       rpcUrl: rpc, agent: pk(need(v.agent, "agent")), tradingKey: loadKeypair(need(v.key, "key")), hook: v.hook, notify: v.notify,
-      holdSecs: Math.round(parseFloat(v["hold-min"]!) * 60), bufferSecs: Math.round(parseFloat(v["buffer-min"]!) * 60),
-      graceSecs: Math.round(parseFloat(v["grace-sec"]!)),
-      paper: v.paper!, pollMs: parseInt(v.poll!, 10) * 1000, stateFile: v.state!,
+      ...runnerTiming(v), paper: v.paper!, stateFile: v.state!,
     });
     await runner.start();
     return;
