@@ -1,4 +1,5 @@
-//! Collateral withdrawal, open_position bounds and rounding, and draw_funds.
+//! Collateral withdrawal, open_position bounds and rounding, draw_funds, and
+//! settlement payouts to wallets near the rent-exempt minimum.
 
 mod common;
 
@@ -320,4 +321,64 @@ fn cancel_after_draw_and_settle_or_claim_on_open_are_rejected() {
     };
     assert!(env.send(ix, &other).is_err());
     assert_eq!(env.position_state(1).status, PositionStatus::Open);
+}
+
+// ---------- payouts to empty wallets ----------
+//
+// The runtime rejects a transaction that leaves a 0-data account holding
+// lamports below the rent-exempt minimum. LiteSVM only checks accounts with
+// data, so these tests pin the program's side of it: a fee that would leave
+// the operator wallet under the floor goes to the trader instead. The runtime
+// side is covered by app/tests/localnet.test.ts against solana-test-validator.
+
+/// Launched agent with a separate trading key, 1 SOL drawn, operator wallet
+/// holding `operator_lamports`.
+fn drawn_with_operator_balance(operator_lamports: u64) -> (Env, Keypair) {
+    let mut env = Env::launched();
+    let (op, ex) = (env.op(), env.executor.insecure_clone());
+    env.bind_executor(ex.pubkey(), &op).unwrap();
+    env.open(0, SOL, 3_600).unwrap();
+    env.draw(0, &ex).unwrap();
+    let mut acc = env.svm.get_account(&op.pubkey()).unwrap();
+    acc.lamports = operator_lamports;
+    env.svm.set_account(op.pubkey(), acc).unwrap();
+    (env, ex)
+}
+
+#[test]
+fn a_fee_below_the_rent_floor_goes_to_the_trader_when_the_operator_wallet_is_empty() {
+    let (mut env, ex) = drawn_with_operator_balance(0);
+    let trader_before = env.balance(&env.trader.pubkey());
+    // 15% of a 1_000_000 profit = 150_000, well under the ~890_880 floor.
+    env.settle(0, SOL + 1_000_000, &ex).unwrap();
+    assert_eq!(env.balance(&env.operator.pubkey()), 0);
+    assert_eq!(env.balance(&env.trader.pubkey()) - trader_before, SOL + 1_000_000 + env.rent_floor());
+    let p = env.position_state(0);
+    assert_eq!((p.status, p.breach, p.fee_paid), (PositionStatus::Settled, Breach::None, 0));
+    assert_eq!(env.agent_state().fees_earned, 0);
+    env.check_invariants();
+}
+
+#[test]
+fn the_fee_is_paid_when_it_lifts_the_operator_wallet_to_the_rent_floor() {
+    let floor = Env::new().rent_floor();
+    // Exactly at the floor after the 150_000 fee.
+    let (mut env, ex) = drawn_with_operator_balance(floor - 150_000);
+    env.settle(0, SOL + 1_000_000, &ex).unwrap();
+    assert_eq!(env.balance(&env.operator.pubkey()), floor);
+    assert_eq!(env.position_state(0).fee_paid, 150_000);
+    assert_eq!(env.agent_state().fees_earned, 150_000);
+
+    // One lamport short: the trader keeps it.
+    let (mut env, ex) = drawn_with_operator_balance(floor - 150_001);
+    env.settle(0, SOL + 1_000_000, &ex).unwrap();
+    assert_eq!(env.balance(&env.operator.pubkey()), floor - 150_001);
+    assert_eq!(env.position_state(0).fee_paid, 0);
+
+    // A fee above the floor reaches an empty wallet.
+    let (mut env, ex) = drawn_with_operator_balance(0);
+    env.settle(0, SOL + SOL / 5, &ex).unwrap();
+    assert_eq!(env.balance(&env.operator.pubkey()), 3 * SOL / 100);
+    assert_eq!(env.position_state(0).fee_paid, 3 * SOL / 100);
+    env.check_invariants();
 }

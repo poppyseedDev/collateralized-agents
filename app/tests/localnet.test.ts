@@ -11,7 +11,9 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { AnchorProvider, BN, Idl, Program, Wallet } from "@coral-xyz/anchor";
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
+import {
+  Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction,
+} from "@solana/web3.js";
 import idl from "../lib/idl.json";
 import { agentPda, agentVaultPda, positionPda, positionVaultPda } from "../lib/program";
 
@@ -46,6 +48,17 @@ async function expectAnchorError(p: Promise<unknown>, code: string) {
 }
 
 const balance = (k: PublicKey) => connection.getBalance(k, "confirmed");
+
+/** Move every lamport out of `kp`, with `payer` paying the fee, so the wallet ends at 0. */
+async function emptyWallet(kp: Keypair, payer: Keypair) {
+  const lamports = await balance(kp.publicKey);
+  const tx = new Transaction().add(
+    SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: payer.publicKey, lamports }),
+  );
+  tx.feePayer = payer.publicKey;
+  await sendAndConfirmTransaction(connection, tx, [payer, kp], { commitment: "confirmed" });
+  assert.equal(await balance(kp.publicKey), 0);
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const SOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
@@ -320,5 +333,77 @@ describe("proof_of_agent on localnet", () => {
     assert.equal(a.lockedCollateral.toNumber(), 0);
     // the agent cannot settle a defaulted position afterwards
     await expectAnchorError(env.settle(position, 1 * SOL), "InvalidStatus");
+  });
+
+  // The runtime refuses a transaction that leaves a 0-data account holding
+  // lamports below the rent-exempt minimum. LiteSVM skips that check for
+  // accounts without data, so these cases only run against a real validator.
+  it("settles a dust fee when the operator wallet is empty: the trader keeps the fee", async () => {
+    const env = await setup(3000, 2000, 1);
+    const executor = Keypair.generate();
+    await fund(executor, 3);
+    await env.bindExecutor(executor.publicKey);
+    const ex = programFor(executor);
+    const position = await env.open(1 * SOL, 3600);
+    await env.draw(position, ex, executor.publicKey);
+    await emptyWallet(env.agentKp, executor);
+
+    const traderBefore = await balance(env.traderKp.publicKey);
+    await env.settle(position, 1 * SOL + 1_000_000, ex, executor.publicKey); // fee would be 150_000
+    assert.equal(await balance(env.agentKp.publicKey), 0);
+    assert.equal((await balance(env.traderKp.publicKey)) - traderBefore, 1 * SOL + 1_000_000 + rentFloor);
+    const p = await env.positionState(position);
+    assert.deepEqual(p.status, { settled: {} });
+    assert.equal(p.feePaid.toNumber(), 0);
+    assert.equal((await env.agentState()).feesEarned.toNumber(), 0);
+  });
+
+  it("pays a fee above the rent floor to an empty operator wallet", async () => {
+    const env = await setup(3000, 2000, 1);
+    const executor = Keypair.generate();
+    await fund(executor, 3);
+    await env.bindExecutor(executor.publicKey);
+    const ex = programFor(executor);
+    const position = await env.open(1 * SOL, 3600);
+    await env.draw(position, ex, executor.publicKey);
+    await emptyWallet(env.agentKp, executor);
+
+    await env.settle(position, 1.2 * SOL, ex, executor.publicKey);
+    assert.equal(await balance(env.agentKp.publicKey), 0.03 * SOL);
+    assert.equal((await env.positionState(position)).feePaid.toNumber(), 0.03 * SOL);
+  });
+
+  it("pays a dust slash to an empty trader wallet", async () => {
+    const env = await setup(3000, 2000, 1);
+    const position = await env.open(1 * SOL, 3600);
+    await env.draw(position);
+    await emptyWallet(env.traderKp, env.agentKp);
+
+    await env.settle(position, 0.8 * SOL - 1); // 1 lamport below the floor
+    const p = await env.positionState(position);
+    assert.equal(p.slashed.toNumber(), 1);
+    assert.equal(await balance(env.traderKp.publicKey), 0.8 * SOL - 1 + 1 + rentFloor);
+  });
+
+  it("pays a default to an empty trader wallet (waits ~65s)", { timeout: 120_000 }, async () => {
+    const env = await setup(3000, 2000, 1);
+    const position = await env.open(1 * SOL, 60);
+    await env.draw(position);
+    const payer = Keypair.generate();
+    await fund(payer, 1);
+    await emptyWallet(env.traderKp, payer);
+
+    const deadline = (await env.positionState(position)).deadline.toNumber();
+    await sleep(Math.max(deadline * 1000 - Date.now() + 5_000, 0));
+    const tx = await env.tp.methods
+      .claimDefault()
+      .accounts({
+        trader: env.traderKp.publicKey, agent: env.agent, agentVault: env.agentVault, position,
+        positionVault: positionVaultPda(position), systemProgram: SystemProgram.programId,
+      })
+      .transaction();
+    tx.feePayer = payer.publicKey;
+    await sendAndConfirmTransaction(connection, tx, [payer, env.traderKp], { commitment: "confirmed" });
+    assert.equal(await balance(env.traderKp.publicKey), 0.3 * SOL + rentFloor);
   });
 });

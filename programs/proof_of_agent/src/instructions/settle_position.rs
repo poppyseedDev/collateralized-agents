@@ -9,7 +9,10 @@ use crate::{
 
 /// The agent's trading key returns `returned` lamports and the position is
 /// closed. Outcomes:
-///   * profit  -> the operator earns `fee_bps` of the profit, trader gets the rest
+///   * profit  -> the operator earns `fee_bps` of the profit, trader gets the rest.
+///     If the fee would leave the operator wallet below the rent-exempt
+///     minimum (an empty wallet and a fee under ~0.00089 SOL), the trader
+///     keeps it instead and `fee_paid` is 0, so settlement cannot be blocked.
 ///   * loss within max_drawdown -> tolerated trading loss, no fee, no slash
 ///   * loss beyond max_drawdown -> breach: the shortfall is paid to the trader
 ///     from the agent's reserved collateral (up to the guarantee)
@@ -134,13 +137,26 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
         position.locked_collateral,
     )?;
 
-    // Pay the performance fee to the operator from the position vault.
+    // Pay the performance fee to the operator from the position vault. The
+    // runtime rejects a transaction that leaves an account holding lamports
+    // below its rent-exempt minimum, so a fee too small to lift an empty
+    // operator wallet over it would block settlement on every retry. Such a
+    // fee stays in the vault and goes to the trader with the rest.
+    let operator = ctx.accounts.operator.to_account_info();
+    let fee = if operator.key() == ctx.accounts.trader.key()
+        || operator.lamports().saturating_add(s.fee)
+            >= Rent::get()?.minimum_balance(operator.data_len())
+    {
+        s.fee
+    } else {
+        0
+    };
     super::transfer_from_vault(
         &ctx.accounts.position_vault.to_account_info(),
-        &ctx.accounts.operator.to_account_info(),
+        &operator,
         &sys,
         position_seeds,
-        s.fee,
+        fee,
     )?;
 
     // Slash the agent's collateral to cover the misbehaviour shortfall.
@@ -181,7 +197,7 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
     }
     agent.fees_earned = agent
         .fees_earned
-        .checked_add(s.fee)
+        .checked_add(fee)
         .ok_or(ErrorCode::Overflow)?;
 
     let breach = if late {
@@ -205,7 +221,7 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
     position.breach = breach;
     position.returned = effective_returned;
     position.slashed = s.slash;
-    position.fee_paid = s.fee;
+    position.fee_paid = fee;
     position.closed_at = now;
 
     if declined {
@@ -225,8 +241,8 @@ pub fn handle_settle_position(ctx: Context<SettlePosition>, returned: u64) -> Re
         breach,
         returned: effective_returned,
         slashed: s.slash,
-        fee_paid: s.fee,
-        trader_payout: effective_returned - s.fee + s.slash,
+        fee_paid: fee,
+        trader_payout: effective_returned - fee + s.slash,
     });
     Ok(())
 }

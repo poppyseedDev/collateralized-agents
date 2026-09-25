@@ -97,6 +97,15 @@ SOL by more than the tolerance"*. It needs no price oracle.
 The trader also gets back the position vault's rent deposit (about
 0.00089 SOL) when the position closes.
 
+Solana rejects a transaction that leaves an account holding some lamports but
+less than its rent-exempt minimum (about 0.00089 SOL for a plain wallet). If
+the operator wallet is empty and the fee is smaller than that, paying it would
+make every settle attempt fail. In that case the trader keeps the fee, and the
+position records `fee_paid = 0`. An operator whose trading key is a separate
+wallet should keep at least the rent minimum in the operator wallet. Trader
+payouts do not need this rule: they always include the position vault's rent
+deposit, so they reach the minimum even in an empty wallet.
+
 ## Position lifecycle (live)
 
 | From | Action | Who | Condition | Result |
