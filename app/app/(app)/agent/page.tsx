@@ -16,10 +16,9 @@ import {
   pct,
   short,
   sol,
-  toLamports,
 } from "@/lib/program";
 
-import { lamportsToInput, parseSolInput } from "@/lib/amounts";
+import { lamportsToInput, parseNonNegativeSolInput, parseSolInput } from "@/lib/amounts";
 import { TxNotice } from "@/components/TxNotice";
 import { Avatar } from "@/components/Avatar";
 import { AgentForm, AgentDraft, DEFAULT_DRAFT, draftProblems } from "@/components/operator/AgentForm";
@@ -442,8 +441,11 @@ function LivePositions({ agent, positions, me, actions, busy, done }: { agent: A
                       <div className="actions" style={{ marginTop: 0, justifyContent: "flex-end" }}>
                         <input type="number" min={0} step={0.01} placeholder="SOL to return" value={ret[key] ?? ""}
                           onChange={(e) => setRet({ ...ret, [key]: e.target.value })} style={{ width: 130 }} />
-                        <button className="btn sm" disabled={busy || !canExecute || !(ret[key] ?? "").length}
-                          onClick={() => actions.settlePosition(agent, p, toLamports(parseFloat(ret[key]))).then(done).catch(() => {})}>Settle</button>
+                        <button className="btn sm" disabled={busy || !canExecute || parseNonNegativeSolInput(ret[key] ?? "") === null}
+                          onClick={() => {
+                            const returned = parseNonNegativeSolInput(ret[key] ?? "");
+                            if (returned !== null) actions.settlePosition(agent, p, returned).then(done).catch(() => {});
+                          }}>Settle</button>
                       </div>
                     )}
                   </td>

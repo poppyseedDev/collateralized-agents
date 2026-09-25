@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { lamportsToInput, parseSolInput, toLamports } from "@/lib/amounts";
+import { lamportsToInput, parseNonNegativeSolInput, parseSolInput, toLamports, u64 } from "@/lib/amounts";
 import { toLamports as programToLamports } from "@/lib/program";
 import { withLocale } from "./helpers/locale";
 
@@ -63,6 +63,25 @@ for (const locale of ["en-US", "de-DE"]) {
       assert.equal(toLamports(0.1 + 0.2), 300_000_000);
       assert.equal(toLamports(1.0000000004), LAMPORTS);
       assert.equal(toLamports(1.0000000006), LAMPORTS + 1);
+    }));
+
+    it("parseNonNegativeSolInput accepts 0 and rejects empty, negative and non-numeric input", run(() => {
+      assert.equal(parseNonNegativeSolInput("0"), 0);
+      assert.equal(parseNonNegativeSolInput("1.5"), 1_500_000_000);
+      assert.equal(parseNonNegativeSolInput(""), null);
+      assert.equal(parseNonNegativeSolInput("  "), null);
+      assert.equal(parseNonNegativeSolInput("-0.5"), null);
+      assert.equal(parseNonNegativeSolInput("abc"), null);
+      assert.equal(parseNonNegativeSolInput("1e30"), null, "beyond the safe integer range");
+    }));
+
+    it("u64 refuses amounts borsh would mis-encode", run(() => {
+      assert.equal(u64(5).toString(), "5");
+      assert.equal(u64(0).toString(), "0");
+      assert.throws(() => u64(-500_000_000), /Invalid amount/);
+      assert.throws(() => u64(1.5), /Invalid amount/);
+      assert.throws(() => u64(Number.NaN), /Invalid amount/);
+      assert.throws(() => u64(2 ** 60), /Invalid amount/);
     }));
   });
 }

@@ -44,11 +44,15 @@ Leverage: none
 Exit rule: 
 When I settle: `;
 
+/** The program requires collateral ratio + max drawdown <= 100% (`RatioPlusDrawdownTooHigh`). */
+export const maxDrawdownForRatio = (ratioBps: number) => Math.max(0, Math.min(MAX_DRAWDOWN_BPS, BPS - ratioBps));
+
 export function draftProblems(d: AgentDraft): string[] {
   const t = d.terms;
   const out: string[] = [];
   if (!d.name.trim()) out.push("Give the agent a name.");
   if (t.feeBps > maxFeeForRatio(t.collateralRatioBps)) out.push("Fee is above the cap for this collateral ratio.");
+  if (t.collateralRatioBps + t.maxDrawdownBps > BPS) out.push("Collateral ratio plus maximum drawdown can't exceed 100%.");
   if (t.minDurationSecs > t.maxDurationSecs) out.push("Shortest deadline is longer than the longest.");
   if (t.allowedAssets.length === 0) out.push("Choose at least one asset.");
   if (!t.rules.trim()) out.push("Write the agent's trading rules.");
@@ -68,6 +72,7 @@ export function AgentForm({
   const t = value.terms;
   const setT = (patch: Partial<TermsInput>) => onChange({ ...value, terms: { ...t, ...patch } });
   const feeCap = maxFeeForRatio(t.collateralRatioBps);
+  const drawdownCap = maxDrawdownForRatio(t.collateralRatioBps);
   const [custom, setCustom] = useState("");
   const customValid = (() => {
     try {
@@ -108,7 +113,11 @@ export function AgentForm({
           <input type="range" min={MIN_RATIO_BPS} max={MAX_RATIO_BPS} step={500} value={t.collateralRatioBps}
             onChange={(e) => {
               const r = Number(e.target.value);
-              setT({ collateralRatioBps: r, feeBps: Math.min(t.feeBps, maxFeeForRatio(r)) });
+              setT({
+                collateralRatioBps: r,
+                feeBps: Math.min(t.feeBps, maxFeeForRatio(r)),
+                maxDrawdownBps: Math.min(t.maxDrawdownBps, maxDrawdownForRatio(r)),
+              });
             }} />
           <span className="hint">
             Each 1 SOL of collateral lets the agent manage up to {perSol.toFixed(2)} SOL.
@@ -127,7 +136,7 @@ export function AgentForm({
         <h4>Risk and deadline</h4>
         <div className="field">
           <label>Maximum drawdown · {pct(t.maxDrawdownBps)}</label>
-          <input type="range" min={0} max={MAX_DRAWDOWN_BPS} step={100} value={t.maxDrawdownBps}
+          <input type="range" min={0} max={drawdownCap} step={100} value={Math.min(t.maxDrawdownBps, drawdownCap)}
             onChange={(e) => setT({ maxDrawdownBps: Number(e.target.value) })} />
           <span className="hint">Returning less than {pct(BPS - t.maxDrawdownBps)} of a position is a breach, paid from your bond.</span>
         </div>

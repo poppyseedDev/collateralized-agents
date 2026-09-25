@@ -5,6 +5,7 @@ import { useAnchorWallet, useConnection, useWallet } from "@solana/wallet-adapte
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { BN } from "@coral-xyz/anchor";
 import { fetchProgramAccounts } from "./accounts";
+import { u64 } from "./amounts";
 import {
   AgentAccount,
   PositionAccount,
@@ -146,7 +147,7 @@ export function useActions() {
         const nonce = new BN(Date.now());
         const position = positionPda(agent.publicKey, me, nonce);
         return program.methods
-          .openPosition(nonce, new BN(lamports), new BN(durationSecs))
+          .openPosition(nonce, u64(lamports), new BN(durationSecs))
           .accounts({
             trader: me,
             agent: agent.publicKey,
@@ -223,7 +224,7 @@ export function useActions() {
       run("Deposit collateral", async () => {
         const { program, me } = need();
         return program.methods
-          .depositCollateral(new BN(lamports))
+          .depositCollateral(u64(lamports))
           .accounts({
             operator: me,
             agent: agent.publicKey,
@@ -236,7 +237,7 @@ export function useActions() {
       run("Withdraw collateral", async () => {
         const { program, me } = need();
         return program.methods
-          .withdrawCollateral(new BN(lamports))
+          .withdrawCollateral(u64(lamports))
           .accounts({
             operator: me,
             agent: agent.publicKey,
@@ -265,7 +266,7 @@ export function useActions() {
       run("Settle position", async () => {
         const { program, me } = need();
         return program.methods
-          .settlePosition(new BN(returnedLamports))
+          .settlePosition(u64(returnedLamports))
           .accounts({
             executor: me,
             operator: agent.operator,
