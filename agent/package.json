@@ -7,7 +7,8 @@
     "start": "tsx src/runner.ts",
     "seed-positions": "tsx src/seed-positions.ts",
     "typecheck": "tsc --noEmit",
-    "bad-operator": "tsx src/bad-operator.ts"
+    "bad-operator": "tsx src/bad-operator.ts",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.32.1",

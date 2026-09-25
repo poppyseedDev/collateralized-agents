@@ -115,7 +115,23 @@ export const AGENTS: AgentConfig[] = [
 export const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 /** Optional second RPC, used for reads (position scans, balances, clock) and for settling when the first one fails. */
 export const RPC_URL_FALLBACK = process.env.RPC_URL_FALLBACK || null;
-export const POLL_MS = Number(process.env.POLL_MS ?? 30_000);
+
+/**
+ * A numeric env var: unset or empty gives `fallback`; anything that is not a whole
+ * number within [min, max] stops the runner at startup instead of running on NaN or 0.
+ */
+function numEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const v = Number(raw);
+  if (!Number.isInteger(v) || v < min || v > max) {
+    throw new Error(`${name}=${JSON.stringify(process.env[name])} is invalid: expected a whole number from ${min} to ${max}`);
+  }
+  return v;
+}
+
+/** Delay between ticks, 1 s to 1 h. */
+export const POLL_MS = numEnv("POLL_MS", 30_000, 1_000, 3_600_000);
 
 /** Orca devnet market. */
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -136,9 +152,9 @@ export const POOLS = [
 ];
 /**
  * Slippage allowed below the quote a trade was decided on, in bps. The swap's
- * minimum output is taken from that quote, not from a fresh one at send time.
+ * minimum output is taken from that quote, not from a fresh one at send time. 1 to 1000.
  */
-export const SLIPPAGE_BPS = Number(process.env.SLIPPAGE_BPS ?? 50);
+export const SLIPPAGE_BPS = numEnv("SLIPPAGE_BPS", 50, 1, 1_000);
 /** Settle at least this long before a position's deadline. */
 export const SETTLE_BUFFER_SECS = 5 * 60;
 /** Log an ALERT when a book is still unsettled this close to its deadline. */
