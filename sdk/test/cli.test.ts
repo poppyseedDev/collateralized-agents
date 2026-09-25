@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Keypair } from "@solana/web3.js";
-import { parseCli, runnerTiming } from "../src/args.js";
+import { parseCli, parseId, parsePercentBps, parseScaled, parseSol, runnerTiming } from "../src/args.js";
 import { DEAD_RPC, SDK_DIR, tempDir } from "./helpers.js";
 
 const POA = join(SDK_DIR, "bin", "poa.js");
@@ -82,6 +82,50 @@ describe("argument parsing", () => {
   });
 });
 
+describe("strict amount parsing", () => {
+  test("parseSol converts exactly, with no float rounding", () => {
+    assert.equal(parseSol("1"), 1_000_000_000n);
+    assert.equal(parseSol("1.5"), 1_500_000_000n);
+    assert.equal(parseSol("0.000000001"), 1n);
+    assert.equal(parseSol("0.1"), 100_000_000n);
+    assert.equal(parseSol("0.29"), 290_000_000n, "0.29 * 1e9 is 289999999.99... as a float");
+    assert.equal(parseSol("123456789.123456789"), 123_456_789_123_456_789n);
+    assert.equal(parseSol("18446744073.709551615"), 2n ** 64n - 1n, "u64 max, beyond a double's precision");
+    assert.equal(parseSol("007"), 7_000_000_000n);
+  });
+
+  test("parseSol rejects anything that is not a plain decimal", () => {
+    for (const bad of ["1,5", "1.", ".5", "", " 1", "1 ", "-1", "+1", "1e3", "0x10", "1.0000000001", "NaN", "Infinity", "1.5 SOL", "1_000"]) {
+      assert.throws(() => parseSol(bad), /--sol must be a SOL amount like 1.5, with at most 9 decimals/, JSON.stringify(bad));
+    }
+  });
+
+  test("parseId accepts only whole numbers", () => {
+    assert.equal(parseId("0"), 0);
+    assert.equal(parseId("42"), 42);
+    for (const bad of ["1.5", "1,5", "1a", "", "-1", "1e3", " 1", "9007199254740993"]) {
+      assert.throws(() => parseId(bad), /--id must be a whole number/, JSON.stringify(bad));
+    }
+  });
+
+  test("parsePercentBps is exact to 0.01% and strict", () => {
+    assert.equal(parsePercentBps("30", "ratio"), 3000);
+    assert.equal(parsePercentBps("12.5", "fee"), 1250);
+    assert.equal(parsePercentBps("0.07", "fee"), 7, "0.07 * 100 is 7.000000000000001 as a float");
+    for (const bad of ["1,5", "10.001", "-5", "", "5%"]) {
+      assert.throws(() => parsePercentBps(bad, "fee"), /--fee must be a percentage/, JSON.stringify(bad));
+    }
+  });
+
+  test("parseScaled is strict about the number it scales", () => {
+    assert.equal(parseScaled("1", "min-hours", 3600), 3600);
+    assert.equal(parseScaled("0.5", "minutes", 60), 30);
+    for (const bad of ["1,5", "", "-1", "1e3", "abc", ".5"]) {
+      assert.throws(() => parseScaled(bad, "minutes", 60), /--minutes must be a non-negative number/, JSON.stringify(bad));
+    }
+  });
+});
+
 describe("poa (subprocess, from a directory outside sdk/)", () => {
   test("--help prints usage from any directory", (t) => {
     const cwd = tempDir(t);
@@ -133,6 +177,22 @@ describe("poa (subprocess, from a directory outside sdk/)", () => {
     const r2 = poa(cwd, ["dev", "cancel", "--agent", agent, "--position", agent]);
     assert.equal(r2.code, 1);
     assert.equal(r2.stderr.trim(), "--key is required");
+  });
+
+  test("agent deposit refuses \"1,5\" before touching the network", (t) => {
+    const cwd = tempDir(t);
+    assert.equal(poa(cwd, ["keygen", "--out", "op.json"]).code, 0);
+    const r = poa(cwd, ["agent", "deposit", "--key", "op.json", "--agent", Keypair.generate().publicKey.toBase58(), "--sol", "1,5"]);
+    assert.equal(r.code, 1);
+    assert.equal(r.stderr.trim(), "--sol must be a SOL amount like 1.5, with at most 9 decimals (got 1,5)");
+  });
+
+  test("agent create refuses a non-integer --id", (t) => {
+    const cwd = tempDir(t);
+    assert.equal(poa(cwd, ["keygen", "--out", "op.json"]).code, 0);
+    const r = poa(cwd, ["agent", "create", "--key", "op.json", "--name", "n", "--ratio", "30", "--fee", "10", "--drawdown", "15", "--rules", "r", "--id", "1.5"]);
+    assert.equal(r.code, 1);
+    assert.equal(r.stderr.trim(), "--id must be a whole number (got 1.5)");
   });
 
   test("run refuses a bad --grace-sec before starting", (t) => {

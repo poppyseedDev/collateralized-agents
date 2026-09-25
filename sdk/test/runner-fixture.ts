@@ -18,12 +18,30 @@ export class FakeChain {
   drawn: PublicKey[] = [];
   settled: { position: PublicKey; returned: bigint }[] = [];
   tokenLookups = 0;
+  /** Rent-exempt minimum for a 0-byte account, as mainnet reports it. */
+  rentExempt = 890_880;
+  /** When set, the program-account scan throws this. */
+  scanError: Error | null = null;
+  /** Position keys (base58) the direct fetch reports as missing, as a lagging node would. */
+  missing = new Set<string>();
+  /** Status the direct fetch reports instead of the real one, as a lagging node would. */
+  lagStatus: Position["status"] | null = null;
+  scans = 0;
   /** Called on every balance read, before it returns. */
   onBalance: (() => void) | null = null;
 
   client() {
     return {
-      positions: async () => this.positions,
+      positions: async () => {
+        this.scans++;
+        if (this.scanError) throw this.scanError;
+        return this.positions;
+      },
+      positionNullable: async (key: PublicKey) => {
+        if (this.missing.has(key.toBase58())) return null;
+        const p = this.positions.find((x) => x.publicKey.equals(key));
+        return p && this.lagStatus ? { ...p, status: this.lagStatus } : p ?? null;
+      },
       drawFunds: async (_agent: PublicKey, position: PublicKey) => {
         this.drawn.push(position);
         const p = this.positions.find((x) => x.publicKey.equals(position));
@@ -35,6 +53,7 @@ export class FakeChain {
         return "settlesig11111111111";
       },
       connection: {
+        getMinimumBalanceForRentExemption: async (_bytes: number) => this.rentExempt,
         getBalance: async () => {
           this.onBalance?.();
           return this.balance;

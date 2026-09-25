@@ -130,6 +130,12 @@ export class PoaClient {
     return { publicKey: key, ...p, status: enumKey<PositionStatus>(p.status), breach: enumKey<Breach>(p.breach) };
   }
 
+  /** One position by direct account fetch, or null if the RPC node does not have it. */
+  async positionNullable(key: PublicKey): Promise<Position | null> {
+    const p = await this.program.account.position.fetchNullable(key);
+    return p ? { publicKey: key, ...p, status: enumKey<PositionStatus>(p.status), breach: enumKey<Breach>(p.breach) } : null;
+  }
+
   // ---- operator ----
   createAgent(agentId: number, name: string, description: string, terms: Agent["terms"]) {
     const agent = agentPda(this.signer.publicKey, agentId);

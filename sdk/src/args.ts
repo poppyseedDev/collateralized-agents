@@ -40,3 +40,33 @@ export function runnerTiming(v: CliValues) {
     pollMs,
   };
 }
+
+const SOL_RE = /^\d+(\.\d{1,9})?$/;
+
+/** An exact SOL amount in lamports. Strict: "1,5", "1e3", "-1", " 1" or more than 9 decimals are errors, not a silently different amount. */
+export function parseSol(s: string, name = "sol"): bigint {
+  if (!SOL_RE.test(s)) throw new Error(`--${name} must be a SOL amount like 1.5, with at most 9 decimals (got ${s})`);
+  const [whole, frac = ""] = s.split(".");
+  return BigInt(whole) * 1_000_000_000n + BigInt(frac.padEnd(9, "0"));
+}
+
+/** A whole non-negative id, strict: "1.5" or "1a" is an error rather than 1. */
+export function parseId(s: string, name = "id"): number {
+  const n = /^\d+$/.test(s) ? Number(s) : NaN;
+  if (!Number.isSafeInteger(n)) throw new Error(`--${name} must be a whole number (got ${s})`);
+  return n;
+}
+
+/** A percentage in basis points, exact to 0.01%. */
+export function parsePercentBps(s: string, name: string): number {
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) throw new Error(`--${name} must be a percentage like 12.5, with at most 2 decimals (got ${s})`);
+  const [whole, frac = ""] = s.split(".");
+  return Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+}
+
+/** A plain non-negative decimal such as 1 or 0.5, strict (no commas, exponents or signs), scaled and rounded to a whole number. */
+export function parseScaled(s: string, name: string, scale: number): number {
+  const n = /^\d+(\.\d+)?$/.test(s) ? Math.round(Number(s) * scale) : NaN;
+  if (!Number.isSafeInteger(n)) throw new Error(`--${name} must be a non-negative number like 1 or 0.5 (got ${s})`);
+  return n;
+}

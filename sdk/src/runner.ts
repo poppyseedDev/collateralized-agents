@@ -52,6 +52,28 @@ const sol = (n: bigint | number | string) => (Number(n) / LAMPORTS).toFixed(4);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Seconds kept free before the deadline for the settle transaction itself. */
 export const SETTLE_TX_SECS = 30;
+/** Lamports kept on top of the rent-exempt minimum to pay the settle transaction's fee. */
+export const SETTLE_FEE_MARGIN = 20_000n;
+/** Statuses after which a position can never be settled again. */
+const TERMINAL = new Set(["settled", "defaulted", "cancelled"]);
+
+/**
+ * What the trading wallet must keep after settling: the rent-exempt minimum for
+ * a 0-byte account plus the fee. Solana rejects a transaction that leaves a
+ * wallet non-zero but below rent exemption, so a smaller reserve fails every retry.
+ */
+export function walletReserve(rentExemptLamports: number | bigint) {
+  return BigInt(rentExemptLamports) + SETTLE_FEE_MARGIN;
+}
+
+/** The RPC URL's host only: the path or query often carries an API key. */
+export function rpcHost(url: string) {
+  try {
+    return new URL(url).host || "(rpc)";
+  } catch {
+    return "(rpc)";
+  }
+}
 
 /** How long the hook may unwind after SIGTERM: `graceSecs` (default 60), cut so it ends SETTLE_TX_SECS before the deadline, never negative. */
 export function hookGraceSecs(graceSecs: number | undefined, deadline: number, nowSecs: number) {
@@ -131,6 +153,10 @@ export class Runner {
   /** Set when the hook's shell has exited; its children may still be running. */
   private hookExited = false;
   private stopping = false;
+  /** Cached walletReserve(); the rent-exempt minimum does not change while running. */
+  private reserve: bigint | null = null;
+  /** Set once the low-balance refusal has been notified, so it is not repeated every poll. */
+  private lowBalanceNotified = false;
   private log: (msg: string) => void;
 
   constructor(private opts: RunnerOptions) {
@@ -146,12 +172,19 @@ export class Runner {
   private async notify(event: string, message: string) {
     this.log(`${event}: ${message}`);
     if (!this.opts.notify) return;
-    spawn(this.opts.notify, { shell: true, stdio: "inherit", env: { ...process.env, POA_EVENT: event, POA_MESSAGE: message } });
+    const child = spawn(this.opts.notify, { shell: true, stdio: "inherit", env: { ...process.env, POA_EVENT: event, POA_MESSAGE: message } });
+    // a failed spawn is an 'error' event; unhandled, it would crash the runner
+    child.on("error", (e) => this.log(`notify command failed to start: ${e.message}`));
+  }
+
+  private async walletReserve() {
+    this.reserve ??= walletReserve(await this.client.connection.getMinimumBalanceForRentExemption(0));
+    return this.reserve;
   }
 
   async start() {
     const a = await this.client.agent(this.opts.agent);
-    if (!a) throw new Error(`agent ${this.opts.agent.toBase58()} not found on ${this.opts.rpcUrl}`);
+    if (!a) throw new Error(`agent ${this.opts.agent.toBase58()} not found on ${rpcHost(this.opts.rpcUrl)}`);
     if (!a.executor.equals(this.opts.tradingKey.publicKey) && !a.operator.equals(this.opts.tradingKey.publicKey)) {
       throw new Error(`trading key ${this.opts.tradingKey.publicKey.toBase58()} is not bound to this agent (bound: ${a.executor.toBase58()})`);
     }
@@ -179,19 +212,26 @@ export class Runner {
   }
 
   private async tick() {
-    const positions = await this.client.positions(this.opts.agent);
     const active = this.state.active;
 
     if (active) {
-      const p = positions.find((x) => x.publicKey.toBase58() === active.position);
-      if (!p || p.status !== "trading") {
-        this.log(`position ${active.position} is ${p?.status ?? "gone"}; dropping book`);
+      // A direct fetch of the one account: the program-account scan is heavier,
+      // more often rate-limited, and must never stand between us and settling.
+      const p = await this.client.positionNullable(new PublicKey(active.position));
+      if (!p) {
+        this.log(`position ${active.position} not found on the RPC node; keeping the book and retrying`);
+        return;
+      }
+      if (TERMINAL.has(p.status)) {
+        this.log(`position ${active.position} is ${p.status}; dropping book`);
         if (this.hook?.pid) signalGroup(this.hook.pid, "SIGTERM");
         this.hook = null;
         this.state.active = null;
         this.save();
         return;
       }
+      // "open" here is a node that has not caught up with our confirmed draw; the book stands.
+      if (p.status !== "trading") this.log(`position ${active.position} reads as ${p.status} (RPC lag after the draw?); keeping the book`);
       const dueIn = active.settleAt - now();
       if (dueIn <= 0 || (this.hook && this.hookExited)) {
         await this.settle(p, active);
@@ -200,6 +240,8 @@ export class Runner {
       }
       return;
     }
+
+    const positions = await this.client.positions(this.opts.agent);
 
     // adopt a position we drew before a restart
     const orphan = positions.find((p) => p.status === "trading");
@@ -217,7 +259,20 @@ export class Runner {
     }
 
     const next = positions.filter((p) => p.status === "open" && p.deadline.toNumber() - now() > this.opts.bufferSecs + 120).sort((a, b) => a.openedAt.cmp(b.openedAt))[0];
-    if (next) await this.draw(next);
+    if (!next) return;
+    // The wallet must already hold the settle reserve: after a loss it may return
+    // everything it has left, and a settle that dips below rent exemption always fails.
+    const reserve = await this.walletReserve();
+    const balance = BigInt(await this.client.connection.getBalance(this.opts.tradingKey.publicKey));
+    if (balance < reserve) {
+      const msg = `not drawing ${next.publicKey.toBase58()}: trading wallet holds ${sol(balance)} SOL, below the ${sol(reserve)} SOL it must keep to settle; fund ${this.opts.tradingKey.publicKey.toBase58()}`;
+      if (this.lowBalanceNotified) this.log(msg);
+      else await this.notify("low-balance", msg);
+      this.lowBalanceNotified = true;
+      return;
+    }
+    this.lowBalanceNotified = false;
+    await this.draw(next);
   }
 
   private async draw(p: Position) {
@@ -250,6 +305,12 @@ export class Runner {
     this.hook = hook;
     this.hookExited = false;
     this.log(`hook started (pid ${hook.pid}): ${this.opts.hook}`);
+    // A spawn failure emits 'error' (and maybe no 'exit'). Treat it as the hook
+    // having exited, so the position settles instead of the runner crashing.
+    hook.on("error", (e) => {
+      if (this.hook === hook) this.hookExited = true;
+      this.log(`hook failed to start: ${e.message}`);
+    });
     hook.on("exit", (code, signal) => {
       if (this.hook === hook) this.hookExited = true;
       this.log(`hook exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
@@ -308,9 +369,9 @@ export class Runner {
       const delta = balance - BigInt(book.balanceAtDraw);
       returned = principal + delta;
       if (returned < 0n) returned = 0n;
-      // keep enough in the wallet to pay for the settle transaction itself
-      const spare = balance - returned;
-      if (spare < 20_000n) returned = balance > 20_000n ? balance - 20_000n : 0n;
+      // keep the wallet rent-exempt and able to pay for the settle transaction itself
+      const reserve = await this.walletReserve();
+      if (balance - returned < reserve) returned = balance > reserve ? balance - reserve : 0n;
     }
     const sig = await this.client.settlePosition(this.agentAcc, p, returned);
     const pnl = returned - principal;

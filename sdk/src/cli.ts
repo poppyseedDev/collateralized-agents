@@ -2,7 +2,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { chmodSync, writeFileSync } from "node:fs";
 import { BN, LAMPORTS, PoaClient, agentPda, loadKeypair } from "./client.js";
 import { Runner } from "./runner.js";
-import { parseCli, runnerTiming } from "./args.js";
+import { parseCli, parseId, parsePercentBps, parseScaled, parseSol, runnerTiming } from "./args.js";
 
 const HELP = `poa — operate a Proof of Agent agent from your own server
 
@@ -38,8 +38,6 @@ const { values: v, positionals } = parseCli();
 const rpc = v.rpc ?? process.env.POA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const need = (x: string | undefined, name: string) => { if (!x) throw new Error(`--${name} is required`); return x; };
 const pk = (s: string) => new PublicKey(s);
-const lamports = (solStr: string) => Math.round(parseFloat(solStr) * LAMPORTS);
-const bps = (pct: string) => Math.round(parseFloat(pct) * 100);
 const fmt = (n: BN | number) => (Number(n.toString()) / LAMPORTS).toFixed(4);
 
 async function main() {
@@ -75,10 +73,11 @@ async function main() {
     }
     const c = new PoaClient(rpc, loadKeypair(need(v.key, "key")));
     if (cmd === "create") {
-      const id = parseInt(v.id!, 10);
+      const id = parseId(v.id!);
       const terms = {
-        collateralRatioBps: bps(need(v.ratio, "ratio")), feeBps: bps(need(v.fee, "fee")), maxDrawdownBps: bps(need(v.drawdown, "drawdown")),
-        minDurationSecs: new BN(Math.round(parseFloat(v["min-hours"]!) * 3600)), maxDurationSecs: new BN(Math.round(parseFloat(v["max-days"]!) * 86400)),
+        collateralRatioBps: parsePercentBps(need(v.ratio, "ratio"), "ratio"), feeBps: parsePercentBps(need(v.fee, "fee"), "fee"),
+        maxDrawdownBps: parsePercentBps(need(v.drawdown, "drawdown"), "drawdown"),
+        minDurationSecs: new BN(parseScaled(v["min-hours"]!, "min-hours", 3600)), maxDurationSecs: new BN(parseScaled(v["max-days"]!, "max-days", 86400)),
         allowedAssets: v.assets!.split(",").map((s) => pk(ASSETS[s.trim().toUpperCase()] ?? s.trim())), rules: need(v.rules, "rules"),
       };
       const sig = await c.createAgent(id, need(v.name, "name"), v.description!, terms);
@@ -87,8 +86,8 @@ async function main() {
     }
     const agent = pk(need(v.agent, "agent"));
     const sig =
-      cmd === "deposit" ? await c.depositCollateral(agent, lamports(need(v.sol, "sol")))
-      : cmd === "withdraw" ? await c.withdrawCollateral(agent, lamports(need(v.sol, "sol")))
+      cmd === "deposit" ? await c.depositCollateral(agent, parseSol(need(v.sol, "sol")))
+      : cmd === "withdraw" ? await c.withdrawCollateral(agent, parseSol(need(v.sol, "sol")))
       : cmd === "bind" ? await c.setExecutor(agent, pk(need(v["trading-key"], "trading-key")))
       : cmd === "publish" ? await c.publishAgent(agent)
       : cmd === "pause" ? await c.setAccepting(agent, false)
@@ -109,7 +108,7 @@ async function main() {
 
   if (group === "dev" && cmd === "open") {
     const c = new PoaClient(rpc, loadKeypair(need(v.key, "key")));
-    const { position, sig } = await c.openPosition(pk(need(v.agent, "agent")), lamports(need(v.sol, "sol")), Math.round(parseFloat(v.minutes!) * 60));
+    const { position, sig } = await c.openPosition(pk(need(v.agent, "agent")), parseSol(need(v.sol, "sol")), parseScaled(v.minutes!, "minutes", 60));
     console.log(`opened ${position.toBase58()} (${sig.slice(0, 12)}…)`);
     return;
   }

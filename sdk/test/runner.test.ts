@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BN } from "../src/client.js";
-import { Runner, SETTLE_TX_SECS, hookGraceSecs, loadRunnerState, writeAtomic } from "../src/runner.js";
+import { Runner, SETTLE_FEE_MARGIN, SETTLE_TX_SECS, hookGraceSecs, loadRunnerState, rpcHost, walletReserve, writeAtomic } from "../src/runner.js";
 import { nowSecs, position, tempDir } from "./helpers.js";
 import { TOKEN_2022_PROGRAM, TOKEN_PROGRAM, book, makeRunner } from "./runner-fixture.js";
 
@@ -169,6 +169,53 @@ describe("tick: what to draw", () => {
   });
 });
 
+describe("wallet reserve", () => {
+  test("is the rent-exempt minimum plus the fee margin", () => {
+    assert.equal(SETTLE_FEE_MARGIN, 20_000n);
+    assert.equal(walletReserve(890_880), 910_880n);
+    assert.equal(walletReserve(0n), 20_000n);
+  });
+
+  test("uses the node's rent-exempt minimum for a 0-byte account, fetched once", async (t) => {
+    const { r, chain } = makeRunner(t);
+    chain.rentExempt = 1_000_000;
+    let calls = 0;
+    const c = (r as unknown as { client: { connection: { getMinimumBalanceForRentExemption: (n: number) => Promise<number> } } }).client.connection;
+    const orig = c.getMinimumBalanceForRentExemption;
+    c.getMinimumBalanceForRentExemption = async (n) => { calls++; assert.equal(n, 0); return orig(n); };
+    const p = position({ status: "trading", principal: new BN(1_000_000_000) });
+    chain.balance = 1_500_000_000;
+    await r.settle(p, book(p, { balanceAtDraw: "500000000" }));
+    assert.equal(chain.settled[0].returned, 1_500_000_000n - 1_020_000n);
+    await r.settle(p, book(p, { balanceAtDraw: "500000000" }));
+    assert.equal(calls, 1);
+  });
+
+  test("refuses to draw while the wallet does not already hold the reserve, notifying once", async (t) => {
+    const { r, chain, logs } = makeRunner(t);
+    const p = position({ status: "open" });
+    chain.positions = [p];
+    chain.balance = 910_879;
+    await r.tick();
+    await r.tick();
+    assert.equal(chain.drawn.length, 0);
+    assert.equal(r.state.active, null);
+    assert.equal(logs.filter((l) => l.startsWith("low-balance:")).length, 1, "notified once, not every poll");
+    assert.ok(logs.some((l) => l.includes("below the 0.0009 SOL it must keep to settle")));
+    chain.balance = 910_880;
+    await r.tick();
+    assert.deepEqual(chain.drawn.map(String), [p.publicKey.toBase58()]);
+  });
+});
+
+describe("rpcHost", () => {
+  test("logs only the host, never a path or query that may hold an API key", () => {
+    assert.equal(rpcHost("https://mainnet.helius-rpc.com/?api-key=SECRET"), "mainnet.helius-rpc.com");
+    assert.equal(rpcHost("https://user:pw@rpc.example.com:8899/v1/SECRET"), "rpc.example.com:8899");
+    assert.equal(rpcHost("not a url"), "(rpc)");
+  });
+});
+
 describe("tick: when to settle", () => {
   test("settles once settleAt has passed", async (t) => {
     const { r, chain } = makeRunner(t);
@@ -212,18 +259,79 @@ describe("tick: when to settle", () => {
     assert.equal(chain.settled.length, 0);
   });
 
-  test("drops the book when the position is no longer trading", async (t) => {
-    for (const status of ["settled", "defaulted", "gone"] as const) {
+  test("drops the book only when the position reaches a terminal status", async (t) => {
+    for (const status of ["settled", "defaulted", "cancelled"] as const) {
       const { r, chain, logs, dir } = makeRunner(t);
-      const p = position({ status: status === "gone" ? "open" : status });
+      const p = position({ status });
       r.state.active = book(p);
-      chain.positions = status === "gone" ? [] : [p];
+      chain.positions = [p];
       await r.tick();
       assert.equal(r.state.active, null, status);
       assert.equal(chain.settled.length, 0, status);
       assert.ok(logs.some((l) => l.includes(`is ${status}; dropping book`)), status);
       assert.equal(JSON.parse(readFileSync(join(dir, "state", "state.json"), "utf8")).active, null);
     }
+  });
+
+  test("keeps the book when a lagging node still reads the drawn position as open", async (t) => {
+    const { r, chain, logs } = makeRunner(t);
+    const p = position({ status: "trading" });
+    const b = book(p);
+    r.state.active = b;
+    r.hook = { pid: undefined };
+    chain.positions = [p];
+    chain.lagStatus = "open";
+    await r.tick();
+    assert.deepEqual(r.state.active, b);
+    assert.ok(r.hook, "hook left running");
+    assert.ok(logs.some((l) => l.includes("reads as open") && l.includes("keeping the book")));
+    assert.equal(chain.settled.length, 0);
+  });
+
+  test("still settles on time when the node reads the position as open", async (t) => {
+    const { r, chain } = makeRunner(t);
+    const p = position({ status: "trading" });
+    r.state.active = book(p, { settleAt: nowSecs() - 1 });
+    chain.positions = [p];
+    chain.lagStatus = "open";
+    await r.tick();
+    assert.equal(chain.settled.length, 1);
+    assert.equal(r.state.active, null);
+  });
+
+  test("keeps the book when the position is missing from the node", async (t) => {
+    const { r, chain, logs } = makeRunner(t);
+    const p = position({ status: "trading" });
+    const b = book(p, { settleAt: nowSecs() - 1 });
+    r.state.active = b;
+    chain.positions = [p];
+    chain.missing.add(p.publicKey.toBase58());
+    await r.tick();
+    assert.deepEqual(r.state.active, b);
+    assert.equal(chain.settled.length, 0);
+    assert.ok(logs.some((l) => l.includes("not found on the RPC node; keeping the book")));
+    // once the node has it again, the due settle goes through
+    chain.missing.clear();
+    await r.tick();
+    assert.equal(chain.settled.length, 1);
+  });
+
+  test("an active position is read by direct fetch: a failing scan does not block settling", async (t) => {
+    const { r, chain } = makeRunner(t);
+    const p = position({ status: "trading" });
+    r.state.active = book(p, { settleAt: nowSecs() - 1 });
+    chain.positions = [p];
+    chain.scanError = new Error("getProgramAccounts rate limited");
+    await r.tick();
+    assert.equal(chain.settled.length, 1);
+    assert.equal(chain.scans, 0, "no scan while a position is active");
+    assert.equal(r.state.active, null);
+  });
+
+  test("a failing scan with no active position throws out of tick (the loop reports it)", async (t) => {
+    const { r, chain } = makeRunner(t);
+    chain.scanError = new Error("getProgramAccounts rate limited");
+    await assert.rejects(r.tick(), /rate limited/);
   });
 
   test("adopts a trading position it has no book for, settling no sooner than 30s from now", async (t) => {
@@ -270,9 +378,17 @@ describe("settle amount", () => {
   test("never negative", async (t) => {
     assert.equal((await run(t, 3_000_000_000, "5000000000")).returned, 0n);
   });
-  test("keeps 20,000 lamports in the wallet for the settle fee", async (t) => {
-    assert.equal((await run(t, 1_100_000_000, "1000000000")).returned, 1_100_000_000n - 20_000n);
+  test("keeps the rent-exempt minimum plus the fee margin in the wallet", async (t) => {
+    const reserve = 890_880n + 20_000n;
+    // all of the wallet would go back: returned is cut so the reserve stays
+    assert.equal((await run(t, 1_100_000_000, "1000000000")).returned, 1_100_000_000n - reserve);
+    // exactly the reserve spare: nothing cut
+    assert.equal((await run(t, 1_000_000_000 + Number(reserve), "1000000000")).returned, 1_000_000_000n);
+    // one lamport short of it: cut by one
+    assert.equal((await run(t, 1_000_000_000 + Number(reserve) - 1, "1000000000")).returned, 1_000_000_000n - 1n);
+    // at or below the reserve: nothing returned
     assert.equal((await run(t, 10_000, "1000000000", 2_000_000_000)).returned, 0n);
+    assert.equal((await run(t, Number(reserve), "1000000000", 2_000_000_000)).returned, 0n);
   });
   test("paper mode returns exactly the principal and reads nothing", async (t) => {
     const { returned, chain } = await run(t, 1, "5000000000", 1_000_000_000, true);

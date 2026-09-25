@@ -215,4 +215,15 @@ describe("early hook exit", () => {
     await waitFor(() => fx.r.hookExited, 5000, "hook exit");
     assert.equal(readFileSync(join(fx.dir, "ran"), "utf8").trim(), p.publicKey.toBase58());
   });
+  test("a hook spawn error is logged and counts as an exit instead of crashing the runner", async (t) => {
+    const { r, logs, chain, p, pgid } = await started(t, `touch "$D/ready"; while :; do sleep 0.05; done`, {}, { settleAt: nowSecs() + 600 });
+    // an 'error' event with no listener would throw here
+    (r.hook as unknown as import("node:events").EventEmitter).emit("error", new Error("spawn /bin/sh EACCES"));
+    assert.equal(r.hookExited, true);
+    assert.ok(logs.some((l) => l === "hook failed to start: spawn /bin/sh EACCES"));
+    await r.tick();
+    assert.equal(chain.settled.length, 1, "settles early, as for an exited hook");
+    assert.ok(chain.settled[0].position.equals(p.publicKey));
+    assert.ok(!exists(-pgid));
+  });
 });
