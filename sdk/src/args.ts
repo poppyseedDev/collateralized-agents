@@ -1,5 +1,7 @@
 /** Command-line parsing for `poa`, kept apart from cli.ts so it can be tested without running a command. */
 import { parseArgs } from "node:util";
+import { DEFAULT_PRIORITY_MICROLAMPORTS, DEFAULT_URGENT_PRIORITY_MICROLAMPORTS } from "./client.js";
+import { SETTLE_TX_SECS } from "./runner.js";
 
 export const OPTIONS = {
   rpc: { type: "string" }, key: { type: "string" }, agent: { type: "string" }, id: { type: "string", default: "1" },
@@ -8,6 +10,8 @@ export const OPTIONS = {
   assets: { type: "string", default: "SOL,USDC" }, rules: { type: "string" }, sol: { type: "string" }, "trading-key": { type: "string" },
   hook: { type: "string" }, notify: { type: "string" }, "hold-min": { type: "string", default: "15" }, "buffer-min": { type: "string", default: "5" },
   "grace-sec": { type: "string", default: "60" }, position: { type: "string" },
+  "priority-fee": { type: "string", default: String(DEFAULT_PRIORITY_MICROLAMPORTS) },
+  "priority-fee-urgent": { type: "string", default: String(DEFAULT_URGENT_PRIORITY_MICROLAMPORTS) },
   paper: { type: "boolean", default: false }, poll: { type: "string", default: "15" }, minutes: { type: "string", default: "30" },
   out: { type: "string", default: "trading.json" }, state: { type: "string", default: ".poa/state.json" }, help: { type: "boolean", default: false },
 } as const;
@@ -29,15 +33,32 @@ function nonNegative(s: string, name: string) {
 /**
  * The runner's timing options in seconds and milliseconds. A value that does not
  * parse is an error: a NaN settle time would never come due and miss the deadline.
+ *
+ * The buffer must cover one poll plus SETTLE_TX_SECS for the settle transaction:
+ * a buffer of 0, or one shorter than a poll, leaves no time to settle once a
+ * failed attempt has to wait for the next tick.
  */
 export function runnerTiming(v: CliValues) {
-  const pollMs = parseInt(v.poll!, 10) * 1000;
+  const pollMs = /^\d+$/.test(v.poll!) ? Number(v.poll) * 1000 : NaN;
   if (!(pollMs > 0)) throw new Error(`--poll must be a whole number of seconds above 0 (got ${v.poll})`);
+  const bufferSecs = Math.round(nonNegative(v["buffer-min"]!, "buffer-min") * 60);
+  const minBuffer = pollMs / 1000 + SETTLE_TX_SECS;
+  if (bufferSecs < minBuffer) {
+    throw new Error(`--buffer-min ${v["buffer-min"]} (${bufferSecs}s) must be at least --poll (${pollMs / 1000}s) + ${SETTLE_TX_SECS}s for the settle transaction = ${minBuffer}s; raise --buffer-min or lower --poll`);
+  }
   return {
     holdSecs: Math.round(nonNegative(v["hold-min"]!, "hold-min") * 60),
-    bufferSecs: Math.round(nonNegative(v["buffer-min"]!, "buffer-min") * 60),
+    bufferSecs,
     graceSecs: Math.round(nonNegative(v["grace-sec"]!, "grace-sec")),
     pollMs,
+  };
+}
+
+/** The settle priority fees, in micro-lamports per compute unit. */
+export function runnerFees(v: CliValues) {
+  return {
+    priorityMicroLamports: parseId(v["priority-fee"]!, "priority-fee"),
+    urgentPriorityMicroLamports: parseId(v["priority-fee-urgent"]!, "priority-fee-urgent"),
   };
 }
 

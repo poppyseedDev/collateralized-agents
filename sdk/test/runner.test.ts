@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BN } from "../src/client.js";
-import { Runner, SETTLE_FEE_MARGIN, SETTLE_TX_SECS, hookGraceSecs, loadRunnerState, rpcHost, walletReserve, writeAtomic } from "../src/runner.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import {
+  AGENT_REFRESH_MS, CLOCK_REFRESH_MS, DRAW_TX_FEE, MIN_SLEEP_MS, Runner, SETTLE_FEE_MARGIN, SETTLE_TX_SECS, URGENT_SECS,
+  hookGraceSecs, loadRunnerState, loopSleepMs, rpcHost, walletReserve, writeAtomic,
+} from "../src/runner.js";
 import { nowSecs, position, tempDir } from "./helpers.js";
 import { TOKEN_2022_PROGRAM, TOKEN_PROGRAM, book, makeRunner } from "./runner-fixture.js";
 
@@ -129,7 +133,29 @@ describe("tick: what to draw", () => {
     await r.tick();
     assert.deepEqual(chain.drawn.map(String), [older.publicKey.toBase58()]);
     assert.equal(r.state.active!.position, older.publicKey.toBase58());
-    assert.equal(r.state.active!.balanceAtDraw, "5000000000", "balance read after the draw");
+  });
+
+  test("balanceAtDraw is the balance read before the draw, plus the principal, less the draw fee", async (t) => {
+    const { r, chain } = makeRunner(t);
+    assert.equal(DRAW_TX_FEE, 5000n);
+    const p = position({ status: "open", principal: new BN(2_000_000_000) });
+    chain.positions = [p];
+    const drawnAtRead: number[] = [];
+    chain.onBalance = () => drawnAtRead.push(chain.drawn.length);
+    await r.tick();
+    assert.deepEqual(drawnAtRead, [0], "one balance read, before the draw was sent");
+    assert.equal(r.state.active!.balanceAtDraw, String(5_000_000_000 + 2_000_000_000 - 5000));
+  });
+
+  test("a node that has not caught up with the draw cannot skew the book", async (t) => {
+    const { r, chain } = makeRunner(t);
+    const p = position({ status: "open", principal: new BN(1_000_000_000) });
+    chain.positions = [p];
+    // a lagging node would report the pre-draw balance after the draw; nothing is read after it now
+    await r.tick();
+    chain.balance = 5_000_000_000 + 1_000_000_000 - 5000; // the wallet after the draw, untouched by the hook
+    await r.settle(p, r.state.active!);
+    assert.equal(chain.settled[0].returned, 1_000_000_000n, "no trades: exactly the principal back");
   });
 
   test("draws nothing when every open position is too close to its deadline", async (t) => {
@@ -390,11 +416,6 @@ describe("settle amount", () => {
     assert.equal((await run(t, 10_000, "1000000000", 2_000_000_000)).returned, 0n);
     assert.equal((await run(t, Number(reserve), "1000000000", 2_000_000_000)).returned, 0n);
   });
-  test("paper mode returns exactly the principal and reads nothing", async (t) => {
-    const { returned, chain } = await run(t, 1, "5000000000", 1_000_000_000, true);
-    assert.equal(returned, 1_000_000_000n);
-    assert.equal(chain.tokenLookups, 0);
-  });
   test("records history and clears the book", async (t) => {
     const { r } = await run(t, 5_000_000_000, "5000000000");
     assert.equal(r.state.active, null);
@@ -441,5 +462,236 @@ describe("non-SOL token warning", () => {
     });
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /could not check token balances: rpc down/);
+  });
+});
+
+describe("balance reads after a settle", () => {
+  test("come from a node at least as far along as the settle's slot, persisted", async (t) => {
+    const { r, chain, dir } = makeRunner(t);
+    const p = position({ status: "trading" });
+    assert.equal(chain.balanceConfigs.length, 0);
+    await r.settle(p, book(p));
+    assert.deepEqual(chain.balanceConfigs, ["confirmed"], "no slot known before the first settle");
+    assert.equal(r.state.minSlot, 1000);
+    assert.equal(JSON.parse(readFileSync(join(dir, "state", "state.json"), "utf8")).minSlot, 1000);
+    chain.positions = [position({ status: "open" })];
+    await r.tick();
+    assert.deepEqual(chain.balanceConfigs[1], { commitment: "confirmed", minContextSlot: 1000 });
+  });
+
+  test("minSlot never goes backwards", async (t) => {
+    const { r, chain } = makeRunner(t);
+    const p = position({ status: "trading" });
+    chain.settleSlot = 2000;
+    await r.settle(p, book(p));
+    chain.settleSlot = 1500;
+    await r.settle(p, book(p));
+    assert.equal(r.state.minSlot, 2000);
+  });
+});
+
+describe("chain time", () => {
+  test("loopSleepMs sleeps until the settle time when that comes before the next poll", () => {
+    const T = 1_800_000_000;
+    assert.equal(loopSleepMs(15_000, null, T), 15_000);
+    assert.equal(loopSleepMs(15_000, T + 60, T), 15_000);
+    assert.equal(loopSleepMs(15_000, T + 4, T), 4000);
+    assert.equal(MIN_SLEEP_MS, 1000);
+    assert.equal(loopSleepMs(15_000, T, T), 1000, "a due settle that failed is retried after MIN_SLEEP_MS, not in a hot loop");
+    assert.equal(loopSleepMs(15_000, T - 100, T), 1000);
+    assert.equal(loopSleepMs(500, T + 4, T), 500, "never longer than the poll");
+  });
+
+  test("a settle is due by the cluster's clock when the local clock is behind", async (t) => {
+    const { r, chain } = makeRunner(t);
+    chain.blockTime = nowSecs() + 600;
+    const p = position({ status: "trading" });
+    r.state.active = book(p, { settleAt: nowSecs() + 300, deadline: nowSecs() + 900 });
+    chain.positions = [p];
+    await r.tick();
+    assert.equal(chain.settled.length, 1, "chain time is past settleAt");
+  });
+
+  test("a settle is not early by the cluster's clock when the local clock is ahead", async (t) => {
+    const { r, chain, logs } = makeRunner(t);
+    chain.blockTime = nowSecs() - 300;
+    const p = position({ status: "trading" });
+    r.state.active = book(p, { settleAt: nowSecs() - 10 });
+    chain.positions = [p];
+    await r.tick();
+    assert.equal(chain.settled.length, 0);
+    assert.ok(logs.some((l) => /using chain time \(local clock is 30\ds ahead\)/.test(l)), logs.join("\n"));
+  });
+
+  test("draw decisions and drawnAt use chain time", async (t) => {
+    const { r, chain } = makeRunner(t, { bufferSecs: 60, holdSecs: 600 });
+    const chainNow = nowSecs() + 1000;
+    chain.blockTime = chainNow;
+    // plenty of time by the local clock, too little by the chain's
+    chain.positions = [position({ status: "open", deadline: new BN(nowSecs() + 1100) })];
+    await r.tick();
+    assert.equal(chain.drawn.length, 0);
+    const ok = position({ status: "open", deadline: new BN(chainNow + 3600) });
+    chain.positions = [ok];
+    await r.tick();
+    assert.equal(chain.drawn.length, 1);
+    assert.ok(Math.abs(r.state.active!.drawnAt - chainNow) <= 2);
+  });
+
+  test("the offset is measured once per CLOCK_REFRESH_MS, and a failure keeps the last one", async (t) => {
+    const { r, chain, logs } = makeRunner(t);
+    chain.blockTime = nowSecs() + 100;
+    await r.tick();
+    await r.tick();
+    assert.equal(chain.blockTimeReads, 1);
+    assert.ok(Math.abs(r.skew - 100) <= 1);
+    (r as unknown as { clockAt: number }).clockAt = Date.now() - CLOCK_REFRESH_MS - 1;
+    chain.blockTimeError = new Error("rpc down");
+    await r.tick();
+    await r.tick();
+    assert.equal(chain.blockTimeReads, 3, "retried each tick while failing");
+    assert.ok(Math.abs(r.skew - 100) <= 1, "last offset kept");
+    assert.equal(logs.filter((l) => l.includes("chain time unavailable (rpc down)")).length, 1, "logged once");
+  });
+});
+
+describe("settle priority fee", () => {
+  test("small far from the deadline, urgent within URGENT_SECS of it", async (t) => {
+    assert.equal(URGENT_SECS, 120);
+    const { r, chain } = makeRunner(t);
+    const p = position({ status: "trading" });
+    await r.settle(p, book(p, { deadline: nowSecs() + 3600 }));
+    await r.settle(p, book(p, { deadline: nowSecs() + 100 }));
+    assert.deepEqual(chain.settled.map((s) => s.microLamports), [1_000, 50_000]);
+  });
+
+  test("both fees are configurable", async (t) => {
+    const { r, chain } = makeRunner(t, { priorityMicroLamports: 7, urgentPriorityMicroLamports: 70_000 });
+    const p = position({ status: "trading" });
+    await r.settle(p, book(p, { deadline: nowSecs() + 3600 }));
+    await r.settle(p, book(p, { deadline: nowSecs() + 60 }));
+    assert.deepEqual(chain.settled.map((s) => s.microLamports), [7, 70_000]);
+  });
+
+  test("the wallet reserve covers an urgent fee above the default margin", () => {
+    // 5000 base + ceil(200k CU × 100k µL / 1e6) = 25,000 > the 20,000 margin
+    assert.equal(walletReserve(890_880, 100_000), 890_880n + 25_000n);
+    assert.equal(walletReserve(890_880, 50_000), 890_880n + SETTLE_FEE_MARGIN);
+  });
+
+  test("a failed settle keeps the book and forces a binding re-check", async (t) => {
+    const { r, chain } = makeRunner(t);
+    const p = position({ status: "trading" });
+    r.state.active = book(p, { settleAt: nowSecs() - 1 });
+    chain.positions = [p];
+    await r.tick();
+    chain.settled.length = 0;
+    r.state.active = book(p, { settleAt: nowSecs() - 1 });
+    chain.settleError = new Error("custom program error: UnauthorizedExecutor");
+    r.agentAt = Date.now();
+    await assert.rejects(r.tick(), /UnauthorizedExecutor/);
+    assert.ok(r.state.active, "book kept for the retry");
+    assert.equal(r.agentAt, 0);
+  });
+});
+
+describe("paper mode", () => {
+  test("never draws or settles, and logs each would-be draw once", async (t) => {
+    const { r, chain, logs, dir } = makeRunner(t, { paper: true, holdSecs: 600 });
+    const p = position({ status: "open" });
+    chain.positions = [p];
+    await r.tick();
+    await r.tick();
+    assert.equal(chain.drawn.length, 0);
+    assert.equal(chain.settled.length, 0);
+    assert.equal(logs.filter((l) => l.startsWith(`[paper] would draw 1.0000 SOL from ${p.publicKey.toBase58()}`)).length, 1);
+    assert.equal(r.state.active, null, "no real book");
+    assert.ok(!existsSync(join(dir, "state", "state.json")) || JSON.parse(readFileSync(join(dir, "state", "state.json"), "utf8")).active === null);
+    // at the would-be settle time: logged, nothing sent, and the same position is not simulated again
+    r.paperBook!.settleAt = nowSecs() - 1;
+    await r.tick();
+    assert.ok(logs.some((l) => l.startsWith(`[paper] would settle ${p.publicKey.toBase58()}`)));
+    assert.equal(r.paperBook, null);
+    await r.tick();
+    assert.equal(logs.filter((l) => l.startsWith("[paper] would draw")).length, 1);
+    assert.equal(chain.settled.length, 0);
+    assert.equal(chain.balanceConfigs.length, 0, "the wallet is never read");
+  });
+
+  test("leaves a trading position alone: no adoption, no settle", async (t) => {
+    const { r, chain, logs } = makeRunner(t, { paper: true });
+    const p = position({ status: "trading", drawnAt: new BN(nowSecs() - 5000) });
+    chain.positions = [p];
+    r.state.active = book(p, { settleAt: nowSecs() - 1 });
+    await r.tick();
+    assert.equal(chain.settled.length, 0);
+    assert.ok(!logs.some((l) => l.startsWith("adopted")));
+  });
+});
+
+describe("executor re-check", () => {
+  const rebind = (agent: { executor: PublicKey }) => { agent.executor = Keypair.generate().publicKey; };
+
+  test("re-reads the agent at most every AGENT_REFRESH_MS", async (t) => {
+    const { r, chain } = makeRunner(t);
+    await r.tick();
+    await r.tick();
+    assert.equal(chain.agentReads, 1);
+    r.agentAt = Date.now() - AGENT_REFRESH_MS - 1;
+    await r.tick();
+    assert.equal(chain.agentReads, 2);
+  });
+
+  test("alerts when the key is rebound away, stops drawing, and says when it is back", async (t) => {
+    const { r, chain, logs, agent, tradingKey } = makeRunner(t);
+    rebind(agent);
+    chain.positions = [position({ status: "open" })];
+    await r.tick();
+    const alerts = logs.filter((l) => l.startsWith("unbound: ALERT"));
+    assert.equal(alerts.length, 1);
+    assert.ok(alerts[0].includes(tradingKey.publicKey.toBase58()) && alerts[0].includes(agent.executor.toBase58()));
+    assert.match(alerts[0], /UnauthorizedExecutor/);
+    assert.equal(chain.drawn.length, 0);
+    // no position at stake: later checks log without notifying again
+    r.agentAt = 0;
+    await r.tick();
+    assert.equal(logs.filter((l) => l.startsWith("unbound:")).length, 1);
+    agent.executor = tradingKey.publicKey;
+    r.agentAt = 0;
+    await r.tick();
+    assert.ok(logs.some((l) => l.startsWith("rebound:")));
+    assert.equal(chain.drawn.length, 1);
+  });
+
+  test("with a position at stake, alerts at every check and names the deadline", async (t) => {
+    const { r, chain, logs, agent } = makeRunner(t);
+    const p = position({ status: "trading" });
+    const b = book(p);
+    r.state.active = b;
+    chain.positions = [p];
+    rebind(agent);
+    await r.tick();
+    r.agentAt = 0;
+    await r.tick();
+    const alerts = logs.filter((l) => l.startsWith("unbound: ALERT"));
+    assert.equal(alerts.length, 2);
+    assert.ok(alerts[0].includes(b.position) && alerts[0].includes(new Date(b.deadline * 1000).toISOString()));
+  });
+
+  test("the operator key counts as bound", async (t) => {
+    const { r, chain, logs, agent, tradingKey } = makeRunner(t);
+    agent.executor = Keypair.generate().publicKey;
+    agent.operator = tradingKey.publicKey;
+    chain.positions = [position({ status: "open" })];
+    await r.tick();
+    assert.ok(!logs.some((l) => l.includes("unbound")));
+    assert.equal(chain.drawn.length, 1);
+  });
+
+  test("a failed re-read keeps the last copy", async (t) => {
+    const { r, chain, logs } = makeRunner(t);
+    (chain as unknown as { agentAcc: unknown }).agentAcc = null;
+    await r.tick();
+    assert.ok(logs.some((l) => l.includes("not found on") && l.includes("keeping the last copy")));
   });
 });

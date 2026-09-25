@@ -16,7 +16,20 @@ export class FakeChain {
   tokens: Record<string, TokenAccount[]> = {};
   tokenError: Error | null = null;
   drawn: PublicKey[] = [];
-  settled: { position: PublicKey; returned: bigint }[] = [];
+  settled: { position: PublicKey; returned: bigint; microLamports: number }[] = [];
+  /** The agent account the runner re-reads; set by makeRunner. */
+  agentAcc: Agent | null = null;
+  agentReads = 0;
+  /** When set, settle throws this (as an on-chain rejection would). */
+  settleError: Error | null = null;
+  /** Slot the fake settle reports it landed in. */
+  settleSlot = 1000;
+  /** Cluster time getBlockTime reports; null follows the local clock. */
+  blockTime: number | null = null;
+  blockTimeError: Error | null = null;
+  blockTimeReads = 0;
+  /** The commitment or config of every balance read. */
+  balanceConfigs: unknown[] = [];
   tokenLookups = 0;
   /** Rent-exempt minimum for a 0-byte account, as mainnet reports it. */
   rentExempt = 890_880;
@@ -48,13 +61,26 @@ export class FakeChain {
         if (p) p.status = "trading";
         return "drawsig1111111111111";
       },
-      settlePosition: async (_a: Agent, p: Position, returned: bigint) => {
-        this.settled.push({ position: p.publicKey, returned: BigInt(returned) });
-        return "settlesig11111111111";
+      agent: async (_key: PublicKey) => {
+        this.agentReads++;
+        return this.agentAcc;
+      },
+      settle: async (_a: Agent, p: Position, returned: bigint, fee: { microLamports: number | (() => number) }) => {
+        if (this.settleError) throw this.settleError;
+        const microLamports = typeof fee.microLamports === "function" ? fee.microLamports() : fee.microLamports;
+        this.settled.push({ position: p.publicKey, returned: BigInt(returned), microLamports });
+        return { sig: "settlesig11111111111", slot: this.settleSlot };
       },
       connection: {
+        getSlot: async () => 999,
+        getBlockTime: async (_slot: number) => {
+          this.blockTimeReads++;
+          if (this.blockTimeError) throw this.blockTimeError;
+          return this.blockTime ?? Math.floor(Date.now() / 1000);
+        },
         getMinimumBalanceForRentExemption: async (_bytes: number) => this.rentExempt,
-        getBalance: async () => {
+        getBalance: async (_key: PublicKey, config?: unknown) => {
+          this.balanceConfigs.push(config);
           this.onBalance?.();
           return this.balance;
         },
@@ -81,7 +107,10 @@ export type RunnerInternals = {
   stop(): void;
   hook: { pid?: number } | null;
   hookExited: boolean;
-  state: { active: Book | null; history: { position: string; principal: string; returned: string; at: number }[] };
+  skew: number;
+  agentAt: number;
+  paperBook: Book | null;
+  state: { active: Book | null; history: { position: string; principal: string; returned: string; at: number }[]; hookPgid?: number | null; minSlot?: number };
 };
 export type Book = { position: string; principal: string; balanceAtDraw: string; drawnAt: number; settleAt: number; deadline: number };
 
@@ -96,11 +125,12 @@ export function makeRunner(t: { after: (fn: () => void) => void }, opts: Partial
     pollMs: 15_000, stateFile: join(dir, "state", "state.json"), log: (m) => logs.push(m), ...opts,
   });
   const agent = { publicKey: agentKey, operator: PublicKey.unique(), executor: tradingKey.publicKey } as Agent;
+  chain.agentAcc = agent;
   Object.assign(runner, { client: chain.client(), agentAcc: agent });
   const r = runner as unknown as RunnerInternals;
   // never leave a hook running if a test fails half way
   t.after(() => {
-    if (r.hook?.pid) try { process.kill(-r.hook.pid, "SIGKILL"); } catch { /* gone */ }
+    for (const pgid of [r.hook?.pid, r.state.hookPgid]) if (pgid) try { process.kill(-pgid, "SIGKILL"); } catch { /* gone */ }
   });
   return { runner, r, chain, logs, dir, tradingKey, agent };
 }

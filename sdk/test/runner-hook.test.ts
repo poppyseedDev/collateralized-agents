@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exists, nowSecs, position, waitFor } from "./helpers.js";
+import { BN } from "../src/client.js";
 import { book, makeRunner } from "./runner-fixture.js";
 
 /** Writes an executable /bin/sh script into dir and returns its path. `$D` in the body is the dir. */
@@ -225,5 +226,93 @@ describe("early hook exit", () => {
     assert.equal(chain.settled.length, 1, "settles early, as for an exited hook");
     assert.ok(chain.settled[0].position.equals(p.publicKey));
     assert.ok(!exists(-pgid));
+  });
+});
+
+describe("orphaned hook after a restart", () => {
+  const stubborn = `
+      trap '' TERM
+      sh -c 'trap "" TERM; while :; do sleep 0.05; done' &
+      touch "$D/ready"
+      while :; do sleep 0.05; done`;
+
+  test("the hook's process group is saved in the state file and cleared once it is stopped", async (t) => {
+    const { r, dir, pgid, b } = await started(t, `touch "$D/ready"; while :; do sleep 0.05; done`);
+    const saved = () => JSON.parse(readFileSync(join(dir, "state", "state.json"), "utf8"));
+    assert.equal(saved().hookPgid, pgid);
+    await r.stopHook(b.deadline);
+    assert.equal(saved().hookPgid, null);
+  });
+
+  test("a restarted runner stops the old group before adopting and reading the balance", async (t) => {
+    // runner 1 draws, starts the hook, then dies without its book (state lost down to the pgid)
+    const first = await started(t, stubborn, { graceSecs: 1 });
+    const stateFile = join(first.dir, "state", "state.json");
+    const saved = JSON.parse(readFileSync(stateFile, "utf8"));
+    writeFileSync(stateFile, JSON.stringify({ ...saved, active: null }));
+    first.r.hook = null; // forget the child, as a crashed process would
+    assert.ok(exists(-first.pgid), "the orphan is still trading");
+
+    const second = makeRunner(t, { stateFile, graceSecs: 1 });
+    assert.equal(second.r.state.hookPgid, first.pgid);
+    second.chain.positions = [position({ status: "trading", drawnAt: new BN(nowSecs() - 60) })];
+    let aliveAtRead: boolean | null = null;
+    second.chain.onBalance = () => { aliveAtRead = exists(-first.pgid); };
+    await second.r.tick();
+    assert.equal(aliveAtRead, false, "balance read only after the orphan group was gone");
+    assert.ok(second.r.state.active, "adopted");
+    assert.ok(!exists(-first.pgid));
+    assert.equal(second.r.state.hookPgid, null);
+    assert.ok(second.logs.some((l) => l.includes(`hook process group ${first.pgid} from before a restart`)));
+    assert.ok(second.logs.some((l) => l.includes("orphaned hook; sending SIGTERM") && l.includes("1s to finish")));
+    assert.ok(second.logs.some((l) => l.includes("SIGKILL")), "it ignored SIGTERM, so it was killed");
+  });
+
+  test("a restarted runner with its book stops the old group too", async (t) => {
+    const first = await started(t, `touch "$D/ready"; while :; do sleep 0.05; done`, {}, { settleAt: nowSecs() + 600 });
+    first.r.hook = null;
+    const second = makeRunner(t, { stateFile: join(first.dir, "state", "state.json") });
+    assert.deepEqual(second.r.state.active, first.b);
+    second.chain.positions = [first.p];
+    await second.r.tick();
+    assert.ok(!exists(-first.pgid));
+    assert.equal(second.r.state.hookPgid, null);
+    assert.deepEqual(second.r.state.active, first.b, "the book stands; it settles at settleAt");
+  });
+
+  test("a saved group that is already gone is just cleared", async (t) => {
+    const { r, logs } = makeRunner(t);
+    const child = execFileSync("sh", ["-c", "sh -c 'exit 0' & echo $!"], { encoding: "utf8" }).trim();
+    await waitFor(() => !exists(Number(child)), 5000, "child gone");
+    r.state.hookPgid = Number(child);
+    await r.tick();
+    assert.equal(r.state.hookPgid, null);
+    assert.ok(!logs.some((l) => l.includes("from before a restart")));
+  });
+
+  test("a saved id that is now this process's own is never signalled", async (t) => {
+    const { r } = makeRunner(t);
+    r.state.hookPgid = process.pid;
+    await r.tick(); // would kill the test runner if it signalled
+    assert.equal(r.state.hookPgid, null);
+  });
+});
+
+describe("paper mode hook", () => {
+  test("runs the hook with POA_PAPER=1 for the would-be hold, then stops it; nothing is sent", async (t) => {
+    const fx = makeRunner(t, { paper: true, graceSecs: 1 });
+    const hookPath = script(fx.dir, "hook.sh", `echo "$POA_PAPER" > "$D/paper"; touch "$D/ready"; while :; do sleep 0.05; done`);
+    Object.assign((fx.runner as unknown as { opts: object }).opts, { hook: hookPath });
+    fx.chain.positions = [position({ status: "open" })];
+    await fx.r.tick();
+    await waitFor(() => existsSync(join(fx.dir, "ready")), 5000, "hook ready");
+    assert.equal(readFileSync(join(fx.dir, "paper"), "utf8").trim(), "1");
+    const pgid = fx.r.hook!.pid!;
+    fx.r.paperBook!.settleAt = nowSecs() - 1;
+    await fx.r.tick();
+    assert.ok(!exists(-pgid));
+    assert.equal(fx.chain.drawn.length, 0);
+    assert.equal(fx.chain.settled.length, 0);
+    assert.ok(fx.logs.some((l) => l.startsWith("[paper] would settle")));
   });
 });

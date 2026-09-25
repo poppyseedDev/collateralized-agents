@@ -1,11 +1,13 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import anchor from "@coral-xyz/anchor";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Keypair, PublicKey, SystemProgram, type Transaction, type TransactionInstruction } from "@solana/web3.js";
+import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, Transaction, type TransactionInstruction } from "@solana/web3.js";
 import {
-  BN, IDL, PROGRAM_ID, PoaClient, agentPda, agentVaultPda, loadKeypair, positionPda, positionVaultPda, toBN, type Agent, type Position,
+  BN, IDL, PROGRAM_ID, PoaClient, SETTLE_COMPUTE_UNITS, agentPda, agentVaultPda, loadKeypair, positionPda, positionVaultPda, priorityFeeLamports,
+  sendUntilConfirmed, toBN, type Agent, type Position, type SendConnection,
 } from "../src/client.js";
 import { DEAD_RPC, SDK_DIR, position as makePosition, tempDir } from "./helpers.js";
 
@@ -264,5 +266,195 @@ describe("instruction building", () => {
       const sys = idlIx(name).accounts.find((a) => a.name === "system_program")!;
       assert.equal(sys.address, SystemProgram.programId.toBase58());
     }
+  });
+});
+
+// ---- settle sending: a fake cluster that decides when each signature lands ----
+
+type Status = { slot: number; confirmationStatus: string; err: unknown } | null;
+
+class FakeCluster {
+  blockHeight = 100;
+  blockhashes = 0;
+  sends: { sig: string; raw: string; skipPreflight: boolean }[] = [];
+  statusCalls: { history: boolean }[] = [];
+  /** Returns the status for a signature on each check; default: never seen. */
+  status: (sig: string, check: number) => Status = () => null;
+  preflightError: Error | null = null;
+  /** Called after each sleep, to move the chain along. */
+  onSleep: () => void = () => {};
+  private checks = new Map<string, number>();
+
+  conn(): SendConnection {
+    return {
+      getLatestBlockhash: async () => {
+        this.blockhashes++;
+        return { blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: this.blockHeight + 150 };
+      },
+      sendRawTransaction: async (raw: Buffer | Uint8Array | number[], o?: { skipPreflight?: boolean }) => {
+        const tx = Transaction.from(Buffer.from(raw as Uint8Array));
+        const sig = anchorBs58(tx.signature!);
+        if (!o?.skipPreflight && this.preflightError) throw this.preflightError;
+        this.sends.push({ sig, raw: Buffer.from(raw as Uint8Array).toString("base64"), skipPreflight: !!o?.skipPreflight });
+        return sig;
+      },
+      getSignatureStatuses: async (sigs: string[], cfg?: { searchTransactionHistory?: boolean }) => {
+        this.statusCalls.push({ history: !!cfg?.searchTransactionHistory });
+        const n = (this.checks.get(sigs[0]) ?? 0) + 1;
+        this.checks.set(sigs[0], n);
+        return { context: { slot: 1 }, value: [this.status(sigs[0], n)] };
+      },
+      getBlockHeight: async () => this.blockHeight,
+    } as unknown as SendConnection;
+  }
+}
+
+const anchorBs58 = (b: Uint8Array) => anchor.utils.bytes.bs58.encode(b);
+
+const signer = Keypair.generate();
+/** Builds a signed transfer-free transaction; `prices` records the priority fee read at each build. */
+function builder(prices: number[] = [], price = () => 1000) {
+  return (blockhash: string) => {
+    const p = price();
+    prices.push(p);
+    const tx = new Transaction({ feePayer: signer.publicKey, recentBlockhash: blockhash })
+      .add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: p }));
+    tx.sign(signer);
+    return tx;
+  };
+}
+const noSleep = (c: FakeCluster) => async () => { c.onSleep(); };
+
+describe("sendUntilConfirmed", () => {
+  test("resends the same signed bytes until it confirms, and returns its slot", async () => {
+    const c = new FakeCluster();
+    c.status = (_sig, n) => (n >= 3 ? { slot: 4242, confirmationStatus: "confirmed", err: null } : null);
+    const sent = await sendUntilConfirmed(c.conn(), builder(), { sleep: noSleep(c) });
+    assert.equal(sent.slot, 4242);
+    assert.equal(c.blockhashes, 1, "one signing");
+    assert.equal(c.sends.length, 3, "first send plus two rebroadcasts");
+    assert.equal(new Set(c.sends.map((s) => s.raw)).size, 1, "identical bytes each time");
+    assert.deepEqual(c.sends.map((s) => s.skipPreflight), [false, true, true], "only the first send is simulated");
+    assert.equal(sent.sig, c.sends[0].sig);
+  });
+
+  test("finalized counts; processed does not", async () => {
+    const c = new FakeCluster();
+    c.status = (_sig, n) => ({ slot: 7, confirmationStatus: n < 2 ? "processed" : "finalized", err: null });
+    const sent = await sendUntilConfirmed(c.conn(), builder(), { sleep: noSleep(c) });
+    assert.equal(sent.slot, 7);
+    assert.equal(c.sends.length, 2);
+  });
+
+  test("once the blockhash expires, checks history one last time, then signs a fresh one", async () => {
+    const c = new FakeCluster();
+    let first: string | null = null;
+    c.onSleep = () => { c.blockHeight += 60; };
+    c.status = (sig, n) => {
+      first ??= sig;
+      return sig !== first && n >= 1 ? { slot: 9, confirmationStatus: "confirmed", err: null } : null;
+    };
+    const prices: number[] = [];
+    let price = 1000;
+    const sent = await sendUntilConfirmed(c.conn(), builder(prices, () => (price += 1000)), { sleep: noSleep(c) });
+    assert.equal(c.blockhashes, 2);
+    assert.deepEqual(prices, [2000, 3000], "the fee is re-read at each signing");
+    assert.notEqual(sent.sig, first);
+    assert.ok(c.statusCalls.some((s) => s.history), "searched history before rebuilding");
+  });
+
+  test("an expired transaction that did land is not rebuilt", async () => {
+    const c = new FakeCluster();
+    c.onSleep = () => { c.blockHeight += 200; };
+    c.status = () => null;
+    const conn = c.conn();
+    const orig = conn.getSignatureStatuses.bind(conn);
+    conn.getSignatureStatuses = (async (sigs: string[], cfg?: { searchTransactionHistory?: boolean }) => {
+      const r = await orig(sigs, cfg as Parameters<typeof orig>[1]);
+      return cfg?.searchTransactionHistory ? { ...r, value: [{ slot: 55, confirmationStatus: "confirmed", err: null }] } : r;
+    }) as SendConnection["getSignatureStatuses"];
+    const sent = await sendUntilConfirmed(conn, builder(), { sleep: noSleep(c) });
+    assert.equal(sent.slot, 55);
+    assert.equal(c.blockhashes, 1);
+  });
+
+  test("a transaction that lands with an error throws at once", async () => {
+    const c = new FakeCluster();
+    c.status = () => ({ slot: 3, confirmationStatus: "confirmed", err: { InstructionError: [2, { Custom: 6022 }] } });
+    await assert.rejects(sendUntilConfirmed(c.conn(), builder(), { sleep: noSleep(c) }), /failed: .*6022/);
+    assert.equal(c.blockhashes, 1);
+  });
+
+  test("a simulation failure throws before anything is resent", async () => {
+    const c = new FakeCluster();
+    c.preflightError = new Error("Simulation failed: UnauthorizedExecutor");
+    await assert.rejects(sendUntilConfirmed(c.conn(), builder(), { sleep: noSleep(c) }), /UnauthorizedExecutor/);
+    assert.equal(c.sends.length, 0);
+  });
+
+  test("a flaky status call is logged and the loop goes on", async () => {
+    const c = new FakeCluster();
+    c.status = (_sig, n) => {
+      if (n === 1) throw new Error("429 Too Many Requests");
+      return { slot: 8, confirmationStatus: "confirmed", err: null };
+    };
+    const logs: string[] = [];
+    const sent = await sendUntilConfirmed(c.conn(), builder(), { sleep: noSleep(c), log: (m) => logs.push(m) });
+    assert.equal(sent.slot, 8);
+    assert.ok(logs.some((l) => l.includes("429")));
+  });
+
+  test("gives up after maxBuilds blockhashes", async () => {
+    const c = new FakeCluster();
+    c.onSleep = () => { c.blockHeight += 200; };
+    await assert.rejects(sendUntilConfirmed(c.conn(), builder(), { sleep: noSleep(c), maxBuilds: 2 }), /not confirmed after 2 blockhashes/);
+    assert.equal(c.blockhashes, 2);
+  });
+
+  test("rebuilds after maxPolls even if the block height never moves", async () => {
+    const c = new FakeCluster();
+    await assert.rejects(sendUntilConfirmed(c.conn(), builder(), { sleep: noSleep(c), maxBuilds: 1, maxPolls: 4 }), /not confirmed/);
+    assert.equal(c.sends.length, 5, "the first send plus one rebroadcast per poll, then no more");
+  });
+});
+
+describe("PoaClient.settle", () => {
+  test("adds a compute limit and a priority fee in front of the settle instruction, signed by the trading key", async () => {
+    const client = new PoaClient(DEAD_RPC, Keypair.generate());
+    const c = new FakeCluster();
+    c.status = () => ({ slot: 12, confirmationStatus: "confirmed", err: null });
+    Object.assign(client, { connection: c.conn() });
+    const operator = Keypair.generate().publicKey;
+    const a = { publicKey: agentPda(operator, 1), operator } as Agent;
+    const p = makePosition({ status: "trading", agent: a.publicKey });
+    const sent = await client.settle(a, p, 1_500_000_000n, { microLamports: 25_000 }, { sleep: async () => {} });
+    assert.equal(sent.slot, 12);
+    const tx = Transaction.from(Buffer.from(c.sends[0].raw, "base64"));
+    assert.ok(tx.feePayer!.equals(client.signer.publicKey));
+    assert.ok(tx.verifySignatures());
+    assert.equal(tx.instructions.length, 3);
+    assert.ok(tx.instructions[0].programId.equals(ComputeBudgetProgram.programId));
+    assert.equal(tx.instructions[0].data.readUInt32LE(1), SETTLE_COMPUTE_UNITS, "SetComputeUnitLimit");
+    assert.equal(tx.instructions[1].data.readBigUInt64LE(1), 25_000n, "SetComputeUnitPrice");
+    const args = checkIx(tx.instructions[2], "settle_position", {
+      executor: client.signer.publicKey, operator, agent: a.publicKey, agent_vault: agentVaultPda(a.publicKey),
+      position: p.publicKey, position_vault: positionVaultPda(p.publicKey), trader: p.trader,
+    });
+    assert.equal(args.readBigUInt64LE(0), 1_500_000_000n);
+  });
+
+  test("refuses a negative amount before sending", async () => {
+    const client = new PoaClient(DEAD_RPC, Keypair.generate());
+    const c = new FakeCluster();
+    Object.assign(client, { connection: c.conn() });
+    await assert.rejects(client.settle({ publicKey: PublicKey.unique(), operator: PublicKey.unique() } as Agent, makePosition({ status: "trading" }), -1n, { microLamports: 1 }), /must not be negative/);
+    assert.equal(c.sends.length, 0);
+  });
+
+  test("priorityFeeLamports rounds up price × units", () => {
+    assert.equal(priorityFeeLamports(1_000), 200);
+    assert.equal(priorityFeeLamports(50_000), 10_000);
+    assert.equal(priorityFeeLamports(1, 1), 1);
+    assert.equal(priorityFeeLamports(0), 0);
   });
 });

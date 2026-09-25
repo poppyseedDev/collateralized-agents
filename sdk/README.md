@@ -67,7 +67,7 @@ into the trading wallet and starts your **hook** command with:
 | `POA_SETTLE_BY` | unix time the runner will settle, hook or no hook |
 | `POA_WALLET` | trading wallet address |
 | `POA_RPC_URL` | RPC in use |
-| `POA_PAPER` | `1` in paper mode |
+| `POA_PAPER` | `1` in paper mode (nothing was drawn; do not trade) |
 
 It settles when the hook exits, or at `--hold-min` after drawing, or
 `--buffer-min` before the deadline, whichever comes first. If the hook is
@@ -78,8 +78,24 @@ deadline less 30 seconds for the settle transaction. The wallet balance is read
 only after every process in the group has exited. **A missed deadline costs
 you the whole reserved collateral, so the runner never waits past that.**
 
+The hook's process group id is kept in the state file. If the runner crashes
+while the hook runs, the restarted runner stops that group the same way
+(`SIGTERM`, grace, `SIGKILL`) before it reads the wallet.
+
+`--buffer-min` must be at least `--poll` plus 30 seconds; the runner refuses to
+start otherwise. It wakes early when a settle comes due rather than waiting out
+the poll, and compares settle times and deadlines on the cluster's clock (the
+one the program enforces), re-measured every 5 minutes.
+
+The settle transaction carries a priority fee: `--priority-fee` micro-lamports
+per compute unit (default 1000, about 200 lamports), or `--priority-fee-urgent`
+(default 50000, about 10,000 lamports) within 2 minutes of the deadline. The
+same signed transaction is resent every 2 seconds until it confirms; if its
+blockhash expires it is signed again with a fresh one.
+
 Settlement amount = principal + change in the trading wallet's SOL balance
-since the draw. So:
+since the draw (the balance just before the draw, plus the principal, less the
+draw's 5000-lamport fee). So:
 
 - Use a **dedicated trading wallet**. Anything else that lands in it during a
   position is counted as that position's result (we learned this the hard way:
@@ -89,10 +105,22 @@ since the draw. So:
   holds any non-SOL token balance at settle time.
 - Network fees and token-account rent come out of the result.
 
-One position trades at a time; others wait in the open state. `--paper` runs
-the hook with `POA_PAPER=1` and settles exactly the principal.
+One position trades at a time; others wait in the open state.
+
+`--paper` is a dry run: nothing is drawn or settled and the wallet is never
+touched. For each position it would draw, the runner logs the draw and the
+settle time, runs the hook with `POA_PAPER=1` until then, and logs the would-be
+settle. Positions stay open for a real runner (or the trader) to act on.
+
+The runner re-reads the agent every 2 minutes. If the operator has bound a
+different trading key, every settle would fail, so it sends an `unbound` alert
+(repeated at every check while a position is at stake: rebind the key or settle
+with the operator key before the deadline) and stops drawing until the key is
+bound again.
+
 `--notify "cmd"` runs a command on `settled`, `settle-soon`, `adopted`,
-`warning` and `error` events with `POA_EVENT` and `POA_MESSAGE`. State lives in
+`low-balance`, `unbound`, `rebound`, `warning` and `error` events with
+`POA_EVENT` and `POA_MESSAGE`. State lives in
 `.poa/state.json`, written atomically with the previous version kept as
 `.poa/state.json.bak`; a restart resumes an open position. If the state file
 does not parse, it is moved aside to `state.json.corrupt-<time>` and the backup

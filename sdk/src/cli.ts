@@ -2,7 +2,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { chmodSync, writeFileSync } from "node:fs";
 import { BN, LAMPORTS, PoaClient, agentPda, loadKeypair } from "./client.js";
 import { Runner } from "./runner.js";
-import { parseCli, parseId, parsePercentBps, parseScaled, parseSol, runnerTiming } from "./args.js";
+import { parseCli, parseId, parsePercentBps, parseScaled, parseSol, runnerFees, runnerTiming } from "./args.js";
 
 const HELP = `poa — operate a Proof of Agent agent from your own server
 
@@ -16,7 +16,7 @@ const HELP = `poa — operate a Proof of Agent agent from your own server
   poa agent status   --agent <pubkey>
 
   poa run --key trading.json --agent <pubkey> [--hook "cmd"] [--hold-min 15] [--buffer-min 5] [--grace-sec 60]
-          [--paper] [--notify "cmd"] [--poll 15]
+          [--paper] [--notify "cmd"] [--poll 15] [--priority-fee 1000] [--priority-fee-urgent 50000]
 
   poa keygen --out trading.json
   poa dev open   --key trader.json --agent <pubkey> --sol 0.1 --minutes 30      (test helper)
@@ -100,7 +100,7 @@ async function main() {
   if (group === "run") {
     const runner = new Runner({
       rpcUrl: rpc, agent: pk(need(v.agent, "agent")), tradingKey: loadKeypair(need(v.key, "key")), hook: v.hook, notify: v.notify,
-      ...runnerTiming(v), paper: v.paper!, stateFile: v.state!,
+      ...runnerTiming(v), ...runnerFees(v), paper: v.paper!, stateFile: v.state!,
     });
     await runner.start();
     return;

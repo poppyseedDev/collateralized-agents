@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import anchor, { AnchorProvider, Program, Wallet, type BN as AnchorBN, type Idl } from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram, Transaction, type TransactionInstruction } from "@solana/web3.js";
 
 // Node before 26 cannot see BN as a named export of anchor's CommonJS build.
 export const BN = anchor.BN;
@@ -16,6 +16,18 @@ export const IDL = JSON.parse(readFileSync(fileURLToPath(new URL("../idl/proof_o
 export const PROGRAM_ID = new PublicKey(IDL.address);
 export const SYSTEM = SystemProgram.programId;
 export const LAMPORTS = 1_000_000_000;
+
+/** Solana's base fee per signature, in lamports. Every transaction here has one signature. */
+export const SIGNATURE_FEE = 5_000;
+/** Compute units a settle requests: the default for one instruction, so the limit is what `.rpc()` had. The priority fee is price × this. */
+export const SETTLE_COMPUTE_UNITS = 200_000;
+/** Default priority fee for a settle, in micro-lamports per compute unit (200 lamports at SETTLE_COMPUTE_UNITS). */
+export const DEFAULT_PRIORITY_MICROLAMPORTS = 1_000;
+/** Default priority fee for a settle close to the deadline (10,000 lamports at SETTLE_COMPUTE_UNITS). */
+export const DEFAULT_URGENT_PRIORITY_MICROLAMPORTS = 50_000;
+
+/** The priority fee in lamports for `microLamports` per compute unit, rounded up as the runtime does. */
+export const priorityFeeLamports = (microLamports: number, units = SETTLE_COMPUTE_UNITS) => Math.ceil((microLamports * units) / 1_000_000);
 
 const seed = (s: string) => Buffer.from(s);
 export const agentPda = (operator: PublicKey, agentId: number | BN) =>
@@ -103,6 +115,72 @@ export function loadKeypair(path: string) {
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(path, "utf8"))));
 }
 
+/** A confirmed transaction: its signature and the slot it landed in. */
+export type Sent = { sig: string; slot: number };
+
+/** The connection calls sendUntilConfirmed needs, so tests can stand in for the cluster. */
+export type SendConnection = Pick<Connection, "getLatestBlockhash" | "sendRawTransaction" | "getSignatureStatuses" | "getBlockHeight">;
+
+export type SendOptions = {
+  /** How often to check the status and resend the same signed bytes. Default 2000. */
+  rebroadcastMs?: number;
+  /** Fresh blockhashes to try before giving up. Default 3. */
+  maxBuilds?: number;
+  /** Status checks per blockhash before rebuilding even if the block height never showed it expired. Default: 90s worth. */
+  maxPolls?: number;
+  sleep?: (ms: number) => Promise<void>;
+  log?: (msg: string) => void;
+};
+
+const landed = (s: { confirmationStatus?: string } | null | undefined) => s?.confirmationStatus === "confirmed" || s?.confirmationStatus === "finalized";
+
+/**
+ * Sends a transaction and keeps resending the same signed bytes until it
+ * confirms or its blockhash expires, then signs a fresh one with a new blockhash
+ * (`build` is called again, so it can raise the priority fee). The first send of
+ * each build is simulated, so a program error such as UnauthorizedExecutor
+ * throws at once with its logs; a transaction that lands with an error throws too.
+ */
+export async function sendUntilConfirmed(conn: SendConnection, build: (blockhash: string) => Transaction, opts: SendOptions = {}): Promise<Sent> {
+  const every = opts.rebroadcastMs ?? 2000;
+  const maxBuilds = opts.maxBuilds ?? 3;
+  const maxPolls = opts.maxPolls ?? Math.ceil(90_000 / every);
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const log = opts.log ?? (() => {});
+  const check = async (sig: string, history = false) => {
+    const s = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: history })).value[0];
+    if (s?.err) throw new Error(`transaction ${sig} failed: ${JSON.stringify(s.err)}`);
+    return landed(s) ? { sig, slot: s!.slot } : null;
+  };
+  for (let attempt = 1; attempt <= maxBuilds; attempt++) {
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+    const tx = build(blockhash);
+    const raw = tx.serialize();
+    const sig = anchor.utils.bytes.bs58.encode(tx.signature!);
+    await conn.sendRawTransaction(raw, { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 0 });
+    for (let poll = 0; poll < maxPolls; poll++) {
+      await sleep(every);
+      try {
+        const done = await check(sig);
+        if (done) return done;
+        if ((await conn.getBlockHeight("confirmed")) > lastValidBlockHeight) break;
+        await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 });
+      } catch (e) {
+        if ((e as Error).message.startsWith(`transaction ${sig} failed`)) throw e;
+        log(`resending ${sig.slice(0, 12)}…: ${(e as Error).message}`); // a flaky RPC call; keep going
+      }
+    }
+    // it may have landed in the last valid blocks; once expired it never can, so a rebuild cannot double-send
+    const done = await check(sig, true).catch((e) => {
+      if ((e as Error).message.startsWith(`transaction ${sig} failed`)) throw e;
+      return null;
+    });
+    if (done) return done;
+    log(`transaction ${sig.slice(0, 12)}… expired unconfirmed${attempt < maxBuilds ? "; signing a fresh one" : ""}`);
+  }
+  throw new Error(`transaction not confirmed after ${maxBuilds} blockhashes`);
+}
+
 export class PoaClient {
   readonly connection: Connection;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -165,12 +243,34 @@ export class PoaClient {
     return this.program.methods.drawFunds()
       .accounts({ executor: this.signer.publicKey, agent, position, positionVault: positionVaultPda(position), systemProgram: SYSTEM }).rpc() as Promise<string>;
   }
-  settlePosition(a: Agent, p: Position, returnedLamports: Amount) {
+  private settleMethod(a: Agent, p: Position, returnedLamports: Amount) {
     return this.program.methods.settlePosition(toBN(returnedLamports, "returnedLamports"))
       .accounts({
         executor: this.signer.publicKey, operator: a.operator, agent: a.publicKey, agentVault: agentVaultPda(a.publicKey),
         position: p.publicKey, positionVault: positionVaultPda(p.publicKey), trader: p.trader, systemProgram: SYSTEM,
-      }).rpc() as Promise<string>;
+      });
+  }
+  /** Settles with one plain send, no priority fee. The runner uses settle() instead. */
+  settlePosition(a: Agent, p: Position, returnedLamports: Amount) {
+    return this.settleMethod(a, p, returnedLamports).rpc() as Promise<string>;
+  }
+  /**
+   * Settles with a compute-budget priority fee, resending until confirmed (see
+   * sendUntilConfirmed). `microLamports` is read at each fresh signing, so a
+   * caller can raise it as the deadline nears.
+   */
+  async settle(a: Agent, p: Position, returnedLamports: Amount, fee: { microLamports: number | (() => number) }, opts: SendOptions = {}): Promise<Sent> {
+    const ix: TransactionInstruction = await this.settleMethod(a, p, returnedLamports).instruction();
+    return sendUntilConfirmed(this.connection, (blockhash) => {
+      const microLamports = typeof fee.microLamports === "function" ? fee.microLamports() : fee.microLamports;
+      const tx = new Transaction({ feePayer: this.signer.publicKey, recentBlockhash: blockhash }).add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: SETTLE_COMPUTE_UNITS }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports }),
+        ix,
+      );
+      tx.sign(this.signer);
+      return tx;
+    }, opts);
   }
 
   // ---- trader (for testing) ----
